@@ -48,4 +48,3 @@ This project demonstrates:
 - Export to Notion/Obsidian
 - Mobile app companion
 - Fine-tuned model for better summaries
->>>>>>> 4c21b311 (Add local README)
