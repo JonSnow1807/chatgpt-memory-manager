@@ -1,0 +1,17 @@
+/* Styles for ChatGPT page modifications */
+.memory-indicator {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background-color: #10a37f;
+    color: white;
+    padding: 10px 15px;
+    border-radius: 20px;
+    font-size: 14px;
+    z-index: 9999;
+    display: none;
+}
+
+.memory-indicator.active {
+    display: block;
+}
