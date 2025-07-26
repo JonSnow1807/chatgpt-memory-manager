@@ -1,7 +1,3 @@
-
-# chatgpt-memory-manager
-AI-powered Chrome extension to capture and search ChatGPT conversations
-=======
 # ChatGPT Memory Manager
 
 An intelligent Chrome extension that captures, stores, and searches ChatGPT conversations using AI-powered summaries and vector embeddings.
