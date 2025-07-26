@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 # chatgpt-memory-manager
 AI-powered Chrome extension to capture and search ChatGPT conversations
 =======
