@@ -38,9 +38,6 @@ This project demonstrates:
 - AI/ML integration expertise
 - Product thinking aligned with OpenAI's mission
 
-## 🚦 Getting Started
-
-[Installation and setup instructions...]
 
 ## 📈 Future Enhancements
 
