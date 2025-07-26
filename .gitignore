@@ -1,14 +1,22 @@
-# --- Python ---
-venv/
-__pycache__/
-*.py[cod]
-*.egg-info/
+# Python
+backend/venv/
+backend/__pycache__/
+backend/*.pyc
+backend/.env
+backend/memory_db/
 
-# --- Node / React ---
-node_modules/
-dist/
-build/
+# Node
+frontend/node_modules/
+frontend/build/
+frontend/.env.local
 
-# --- OS junk ---
+# Extension
+extension/node_modules/
+
+# OS
 .DS_Store
-Thumbs.db
+*.log
+
+# IDE
+.vscode/
+.idea/
