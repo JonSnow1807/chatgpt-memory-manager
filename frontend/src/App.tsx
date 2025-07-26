@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Search, Brain, Calendar, RefreshCw, MessageCircle } from 'lucide-react';
+import { Search, Brain, Calendar, RefreshCw, MessageCircle, Download, BarChart } from 'lucide-react';
 import { format } from 'date-fns';
 import './App.css';
 
@@ -21,12 +21,21 @@ interface SearchResult {
   relevance: number;
 }
 
+interface Stats {
+  totalConversations: number;
+  averageLength: number;
+  mostCommonTopics: string[];
+  lastCaptured: string;
+}
+
 function App() {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [totalMemories, setTotalMemories] = useState(0);
+  const [showStats, setShowStats] = useState(false);
+  const [stats, setStats] = useState<Stats | null>(null);
 
   const API_URL = 'http://localhost:8000';
 
@@ -40,11 +49,39 @@ function App() {
       const response = await axios.get(`${API_URL}/get_all_memories`);
       setMemories(response.data.memories);
       setTotalMemories(response.data.total);
+      calculateStats(response.data.memories);
     } catch (error) {
       console.error('Error loading memories:', error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const calculateStats = (mems: Memory[]) => {
+    if (mems.length === 0) return;
+
+    // Extract topics from summaries
+    const words = mems
+      .map(m => m.summary.toLowerCase().split(' '))
+      .flat()
+      .filter(word => word.length > 4);
+    
+    const wordCount: { [key: string]: number } = {};
+    words.forEach(word => {
+      wordCount[word] = (wordCount[word] || 0) + 1;
+    });
+
+    const topWords = Object.entries(wordCount)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([word]) => word);
+
+    setStats({
+      totalConversations: mems.length,
+      averageLength: Math.round(mems.reduce((acc, m) => acc + m.summary.length, 0) / mems.length),
+      mostCommonTopics: topWords,
+      lastCaptured: mems[0]?.timestamp || 'Never'
+    });
   };
 
   const searchMemories = async () => {
@@ -67,6 +104,25 @@ function App() {
     }
   };
 
+  const exportMemories = () => {
+    const exportData = {
+      exportDate: new Date().toISOString(),
+      totalMemories: memories.length,
+      memories: memories.map(m => ({
+        ...m,
+        formattedDate: format(new Date(m.timestamp), 'MMM d, yyyy h:mm a')
+      }))
+    };
+
+    const dataStr = JSON.stringify(exportData, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `chatgpt-memories-${format(new Date(), 'yyyy-MM-dd')}.json`;
+    link.click();
+  };
+
   return (
     <div className="App">
       <header className="App-header">
@@ -75,14 +131,57 @@ function App() {
             <Brain size={32} className="logo" />
             <h1>ChatGPT Memory Manager</h1>
           </div>
-          <div className="stats">
-            <MessageCircle size={20} />
-            <span>{totalMemories} memories stored</span>
+          <div className="header-actions">
+            <button onClick={() => setShowStats(!showStats)} className="stats-button">
+              <BarChart size={20} />
+              Stats
+            </button>
+            <button onClick={exportMemories} className="export-button" disabled={memories.length === 0}>
+              <Download size={20} />
+              Export
+            </button>
+            <div className="stats">
+              <MessageCircle size={20} />
+              <span>{totalMemories} memories stored</span>
+            </div>
           </div>
         </div>
       </header>
 
       <main className="main-content">
+        {/* Stats Panel */}
+        {showStats && stats && (
+          <div className="stats-panel">
+            <h3>Memory Statistics</h3>
+            <div className="stats-grid">
+              <div className="stat-item">
+                <span className="stat-label">Total Conversations</span>
+                <span className="stat-value">{stats.totalConversations}</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-label">Average Summary Length</span>
+                <span className="stat-value">{stats.averageLength} chars</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-label">Last Captured</span>
+                <span className="stat-value">
+                  {stats.lastCaptured !== 'Never' 
+                    ? format(new Date(stats.lastCaptured), 'MMM d, h:mm a')
+                    : 'Never'}
+                </span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-label">Common Topics</span>
+                <div className="topic-tags">
+                  {stats.mostCommonTopics.map(topic => (
+                    <span key={topic} className="topic-tag">{topic}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Search Section */}
         <div className="search-section">
           <div className="search-container">
