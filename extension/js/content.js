@@ -1,11 +1,12 @@
-// Enhanced content script with REAL OpenAI API analysis
-console.log('ChatGPT Memory Manager with Real AI Analysis loaded!');
+// Enhanced content script with REAL OpenAI API analysis and AI-powered prompt improvement
+console.log('ChatGPT Memory Manager with Real AI Analysis and Prompt Improvement loaded!');
 
 let analysisOverlay = null;
 let analysisTimeout = null;
 let currentInput = null;
 let lastAnalyzedText = '';
 let isAnalyzing = false;
+let lastAnalysis = null; // Store the last analysis for the improve button
 
 const API_URL = 'https://chatgpt-memory-manager-production.up.railway.app';
 
@@ -52,7 +53,85 @@ function getInputText(element) {
     return element.textContent || element.innerText || '';
 }
 
-// NEW: Real OpenAI API Analysis
+// NEW: AI-Powered Prompt Improvement
+async function generateImprovedPromptWithAI(originalPrompt, analysis) {
+    try {
+        console.log('🚀 Generating AI-improved prompt...');
+        
+        const response = await fetch(`${API_URL}/improve_prompt`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                prompt: originalPrompt,
+                analysis: analysis
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`API returned ${response.status}`);
+        }
+        
+        const result = await response.json();
+        console.log('✅ AI-improved prompt generated:', result);
+        
+        return result.improved_prompt;
+        
+    } catch (error) {
+        console.error('❌ AI prompt improvement failed:', error);
+        
+        // Fallback improvement
+        return `Could you please help me with: ${originalPrompt}. Please provide detailed explanations and examples.`;
+    }
+}
+
+// Function to paste text into ChatGPT input
+function pasteIntoInput(text) {
+    const input = findChatGPTInput();
+    if (!input) {
+        console.error('Could not find ChatGPT input field');
+        return false;
+    }
+    
+    try {
+        // Clear current content
+        input.innerHTML = '';
+        input.textContent = '';
+        
+        // Insert new text
+        if (input.tagName === 'TEXTAREA') {
+            input.value = text;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        } else {
+            // For contenteditable divs (most common in ChatGPT)
+            input.innerHTML = text.replace(/\n/g, '<br>');
+            input.textContent = text;
+            
+            // Trigger input events to notify ChatGPT
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        
+        // Focus the input
+        input.focus();
+        
+        // Set cursor to end
+        const range = document.createRange();
+        const selection = window.getSelection();
+        range.selectNodeContents(input);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        
+        return true;
+    } catch (error) {
+        console.error('Error pasting text:', error);
+        return false;
+    }
+}
+
+// Real OpenAI API Analysis
 async function analyzePromptWithOpenAI(promptText) {
     try {
         console.log('🤖 Analyzing prompt with OpenAI API...');
@@ -109,13 +188,16 @@ async function analyzePromptWithOpenAI(promptText) {
         analysis.icon = domainIcons[analysis.context] || '💬';
         analysis.loading = false;
         
+        // Store analysis for improvement button
+        lastAnalysis = analysis;
+        
         return analysis;
         
     } catch (error) {
         console.error('❌ OpenAI analysis failed:', error);
         
         // Return fallback analysis
-        return {
+        const fallback = {
             score: 3.0,
             context: 'general',
             icon: '💬',
@@ -125,6 +207,9 @@ async function analyzePromptWithOpenAI(promptText) {
             loading: false,
             error: true
         };
+        
+        lastAnalysis = fallback;
+        return fallback;
     } finally {
         isAnalyzing = false;
     }
@@ -151,7 +236,7 @@ function createAnalysisOverlay() {
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         display: none;
         transition: all 0.3s ease;
-        max-height: 550px;
+        max-height: 600px;
         overflow-y: auto;
     `;
     
@@ -174,7 +259,7 @@ function createAnalysisOverlay() {
 }
 
 // Update analysis overlay with real AI results
-function updateAnalysisOverlay(analysis) {
+function updateAnalysisOverlay(analysis, originalPrompt = '') {
     const overlay = analysisOverlay;
     if (!overlay) return;
     
@@ -198,6 +283,9 @@ function updateAnalysisOverlay(analysis) {
     
     const scoreColor = analysis.score >= 7 ? '#10a37f' : analysis.score >= 4 ? '#ffa500' : '#ff6b6b';
     const scoreEmoji = analysis.score >= 8 ? '🎯' : analysis.score >= 6 ? '⚡' : analysis.score >= 4 ? '🔧' : '📝';
+    
+    // Show improve button if score is below 7 and prompt is long enough
+    const showImproveButton = analysis.score < 7 && originalPrompt.length > 10 && !analysis.error;
     
     content.innerHTML = `
         <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
@@ -233,16 +321,95 @@ function updateAnalysisOverlay(analysis) {
         ` : ''}
         
         ${analysis.suggestions && analysis.suggestions.length > 0 ? `
-            <div style="background: rgba(249, 115, 22, 0.1); padding: 8px; border-radius: 6px;">
+            <div style="background: rgba(249, 115, 22, 0.1); padding: 8px; border-radius: 6px; margin-bottom: 10px;">
                 <div style="font-size: 11px; color: #ea580c; font-weight: 600; margin-bottom: 4px;">💡 AI Suggestions:</div>
                 ${analysis.suggestions.map(s => `<div style="font-size: 11px; color: #ea580c; margin-bottom: 3px; line-height: 1.4;">• ${s}</div>`).join('')}
             </div>
+        ` : ''}
+        
+        ${showImproveButton ? `
+            <button id="paste-improved-btn" style="
+                width: 100%;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                border: none;
+                padding: 10px 12px;
+                border-radius: 8px;
+                font-size: 12px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s;
+                margin-bottom: 8px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 6px;
+            ">
+                ✨ Generate AI-Improved Prompt
+            </button>
         ` : ''}
         
         <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #e5e5e5; font-size: 10px; color: #999; text-align: center;">
             ${analysis.error ? 'Fallback analysis' : 'Analyzed by OpenAI GPT-4'}
         </div>
     `;
+    
+    // Add click handler for the paste button
+    if (showImproveButton) {
+        const pasteBtn = content.querySelector('#paste-improved-btn');
+        if (pasteBtn) {
+            pasteBtn.addEventListener('mouseenter', () => {
+                pasteBtn.style.transform = 'translateY(-1px)';
+                pasteBtn.style.boxShadow = '0 4px 12px rgba(102, 126, 234, 0.3)';
+            });
+            
+            pasteBtn.addEventListener('mouseleave', () => {
+                pasteBtn.style.transform = 'translateY(0)';
+                pasteBtn.style.boxShadow = 'none';
+            });
+            
+            pasteBtn.addEventListener('click', async () => {
+                // Show loading state
+                pasteBtn.innerHTML = '🤖 AI is improving your prompt...';
+                pasteBtn.style.background = '#ffa500';
+                pasteBtn.disabled = true;
+                
+                try {
+                    // Call AI improvement API
+                    const improvedPrompt = await generateImprovedPromptWithAI(originalPrompt, lastAnalysis);
+                    
+                    // Paste the improved prompt
+                    const success = pasteIntoInput(improvedPrompt);
+                    
+                    if (success) {
+                        // Success feedback
+                        pasteBtn.innerHTML = '✅ AI-Improved Prompt Pasted!';
+                        pasteBtn.style.background = '#10a37f';
+                        
+                        // Hide overlay after successful paste
+                        setTimeout(() => {
+                            overlay.style.display = 'none';
+                        }, 2000);
+                    } else {
+                        throw new Error('Failed to paste');
+                    }
+                    
+                } catch (error) {
+                    console.error('Error improving prompt:', error);
+                    pasteBtn.innerHTML = '❌ Improvement failed - try again';
+                    pasteBtn.style.background = '#ff6b6b';
+                    pasteBtn.disabled = false;
+                    
+                    // Reset after 3 seconds
+                    setTimeout(() => {
+                        pasteBtn.innerHTML = '✨ Generate AI-Improved Prompt';
+                        pasteBtn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+                        pasteBtn.disabled = false;
+                    }, 3000);
+                }
+            });
+        }
+    }
 }
 
 // Handle input changes with AI analysis
@@ -270,7 +437,7 @@ function handleInputChange() {
                 
                 try {
                     const analysis = await analyzePromptWithOpenAI(text);
-                    updateAnalysisOverlay(analysis);
+                    updateAnalysisOverlay(analysis, text); // Pass original text
                 } catch (error) {
                     console.error('Analysis error:', error);
                 }
@@ -284,7 +451,7 @@ function handleInputChange() {
                     suggestions: ['Add more details for AI analysis'],
                     analysis: 'Type at least 10 characters for full AI analysis',
                     loading: false
-                });
+                }, text);
             }
         }, 1500); // Longer delay for API calls
         
@@ -294,6 +461,7 @@ function handleInputChange() {
             analysisOverlay.style.display = 'none';
         }
         lastAnalyzedText = '';
+        lastAnalysis = null;
     }
 }
 
@@ -314,7 +482,7 @@ function setupInputMonitoring() {
         currentInput = input;
         
         createAnalysisOverlay();
-        console.log('🤖 Real OpenAI-powered Prompt Coach ready!');
+        console.log('🤖 Real OpenAI-powered Prompt Coach with AI Improvement ready!');
     }
 }
 

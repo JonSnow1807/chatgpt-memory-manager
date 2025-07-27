@@ -147,9 +147,13 @@ class MemoryUpdate(BaseModel):
     summary: str
     title: str
 
-# NEW: Prompt Analysis Model
 class PromptAnalysisRequest(BaseModel):
     prompt: str
+
+# NEW: Prompt Improvement Model
+class PromptImprovementRequest(BaseModel):
+    prompt: str
+    analysis: Dict
 
 # Routes
 @app.get("/")
@@ -166,7 +170,6 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
-# NEW: Real OpenAI Prompt Analysis Endpoint
 @app.post("/analyze_prompt")
 async def analyze_prompt(request: PromptAnalysisRequest):
     if not client:
@@ -265,6 +268,86 @@ Focus on prompt engineering best practices:
             "strengths": [],
             "suggestions": ["OpenAI analysis temporarily unavailable"],
             "analysis": "Using fallback analysis due to API issues"
+        }
+
+# NEW: AI-Powered Prompt Improvement Endpoint
+@app.post("/improve_prompt")
+async def improve_prompt(request: PromptImprovementRequest):
+    if not client:
+        raise HTTPException(status_code=503, detail="OpenAI not configured")
+    
+    try:
+        original_prompt = request.prompt.strip()
+        analysis = request.analysis
+        
+        # Create context-aware system prompt
+        context = analysis.get('context', 'general')
+        score = analysis.get('score', 0)
+        suggestions = analysis.get('suggestions', [])
+        
+        system_prompt = f"""You are an expert prompt engineering coach. Your task is to rewrite the user's prompt to make it significantly more effective for ChatGPT.
+
+Original prompt context: {context}
+Current quality score: {score}/10
+Key suggestions to address: {', '.join(suggestions)}
+
+IMPROVEMENT GUIDELINES:
+1. Keep the core intent but make it much more specific and clear
+2. Add appropriate context and background information
+3. Structure the request logically
+4. Include relevant examples or specifications when helpful
+5. Use polite, professional language
+6. For {context} prompts, apply domain-specific best practices
+
+IMPORTANT: 
+- Don't completely change the user's intent
+- Make the improved prompt practical and actionable
+- Aim for 2-4x improvement in clarity and effectiveness
+- Keep it concise but comprehensive
+
+Return ONLY the improved prompt text, no explanations or meta-commentary."""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": f"Original prompt: '{original_prompt}'"
+                }
+            ],
+            max_tokens=400,
+            temperature=0.4
+        )
+        
+        improved_prompt = response.choices[0].message.content.strip()
+        
+        # Remove quotes if the AI wrapped the response
+        if improved_prompt.startswith('"') and improved_prompt.endswith('"'):
+            improved_prompt = improved_prompt[1:-1]
+        if improved_prompt.startswith("'") and improved_prompt.endswith("'"):
+            improved_prompt = improved_prompt[1:-1]
+        
+        logger.info(f"Generated improved prompt (length: {len(improved_prompt)})")
+        
+        return {
+            "improved_prompt": improved_prompt,
+            "original_length": len(original_prompt),
+            "improved_length": len(improved_prompt),
+            "context": context
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in prompt improvement: {str(e)}")
+        return {
+            "improved_prompt": f"Please help me with: {original_prompt}. Could you provide detailed explanations and examples?",
+            "original_length": len(original_prompt),
+            "improved_length": len(f"Please help me with: {original_prompt}. Could you provide detailed explanations and examples?"),
+            "context": "fallback",
+            "error": "AI improvement temporarily unavailable"
         }
 
 @app.post("/save_conversation")
