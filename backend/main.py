@@ -2,16 +2,18 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import chromadb
 from chromadb.utils import embedding_functions
 import openai
 from dotenv import load_dotenv
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 import logging
+import re
+import statistics
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -98,7 +100,6 @@ def smart_truncate(text, max_length=350):
     truncated = text[:max_length]
     
     # Look for sentence endings (including those followed by quotes)
-    import re
     sentence_patterns = [
         r'\.[\"\']?\s',  # Period followed by optional quote and space
         r'![\"\']?\s',   # Exclamation followed by optional quote and space
@@ -128,6 +129,204 @@ def smart_truncate(text, max_length=350):
     # Last resort: just cut at max length with ellipsis
     return text[:max_length].rstrip() + "..."
 
+# Phase 2: Conversation analysis functions
+def extract_topics_from_text(text: str) -> List[str]:
+    """Extract main topics from a text using keyword analysis"""
+    programming_keywords = ["code", "function", "variable", "class", "method", "python", "javascript", "bug", "error", "api", "database", "algorithm"]
+    writing_keywords = ["write", "essay", "article", "content", "blog", "story", "draft", "edit", "grammar", "style"]
+    business_keywords = ["strategy", "market", "analysis", "revenue", "customer", "business", "plan", "growth", "competition"]
+    learning_keywords = ["explain", "understand", "learn", "concept", "theory", "definition", "example", "teach"]
+    creative_keywords = ["design", "creative", "art", "brainstorm", "idea", "innovation", "inspiration"]
+    health_keywords = ["health", "medical", "fitness", "wellness", "nutrition", "exercise", "symptoms"]
+    finance_keywords = ["investment", "money", "budget", "financial", "trading", "economics", "profit"]
+    travel_keywords = ["travel", "trip", "vacation", "hotel", "flight", "tourism", "destination"]
+    
+    text_lower = text.lower()
+    topics = []
+    
+    keyword_groups = {
+        "programming": programming_keywords,
+        "writing": writing_keywords,
+        "business": business_keywords,
+        "learning": learning_keywords,
+        "creative": creative_keywords,
+        "health": health_keywords,
+        "finance": finance_keywords,
+        "travel": travel_keywords
+    }
+    
+    for topic, keywords in keyword_groups.items():
+        if any(keyword in text_lower for keyword in keywords):
+            topics.append(topic)
+    
+    # Default topic if none detected
+    if not topics:
+        topics.append("general")
+    
+    return topics
+
+def calculate_topic_coherence(topics_per_turn: List[List[str]]) -> float:
+    """Calculate how coherent the conversation topics are"""
+    if len(topics_per_turn) < 2:
+        return 8.0
+    
+    # Count topic overlaps between consecutive turns
+    overlap_scores = []
+    for i in range(1, len(topics_per_turn)):
+        current_topics = set(topics_per_turn[i])
+        previous_topics = set(topics_per_turn[i-1])
+        
+        if not current_topics or not previous_topics:
+            overlap_scores.append(0.5)
+            continue
+        
+        intersection = len(current_topics.intersection(previous_topics))
+        union = len(current_topics.union(previous_topics))
+        
+        overlap_score = intersection / union if union > 0 else 0
+        overlap_scores.append(overlap_score)
+    
+    # Convert to 0-10 scale
+    avg_overlap = statistics.mean(overlap_scores) if overlap_scores else 0.5
+    coherence_score = 10 * avg_overlap + 3  # Bias towards higher scores
+    
+    return min(10.0, max(0.0, coherence_score))
+
+def identify_conversation_issues(history: List[Dict]) -> List[str]:
+    """Identify specific issues in conversation flow"""
+    issues = []
+    
+    if len(history) < 2:
+        return issues
+    
+    user_messages = [msg['content'] for msg in history if msg.get('role') == 'user']
+    assistant_messages = [msg['content'] for msg in history if msg.get('role') == 'assistant']
+    
+    # Check for repetitive user questions
+    if len(user_messages) >= 3:
+        recent_messages = user_messages[-3:]
+        if any(is_similar_question(recent_messages[0], msg) for msg in recent_messages[1:]):
+            issues.append("repetitive_questions")
+    
+    # Check for vague responses
+    if assistant_messages:
+        last_response = assistant_messages[-1]
+        if is_vague_response(last_response):
+            issues.append("vague_response")
+    
+    # Check for conversation length without progression
+    if len(history) > 10:
+        issues.append("potentially_stuck")
+    
+    # Check for topic jumping
+    topics_sequence = []
+    for msg in user_messages:
+        topics_sequence.extend(extract_topics_from_text(msg))
+    
+    if len(set(topics_sequence)) > len(topics_sequence) * 0.8:  # Too many different topics
+        issues.append("topic_jumping")
+    
+    return issues
+
+def is_similar_question(q1: str, q2: str) -> bool:
+    """Check if two questions are similar"""
+    q1_words = set(q1.lower().split())
+    q2_words = set(q2.lower().split())
+    
+    if len(q1_words) == 0 or len(q2_words) == 0:
+        return False
+    
+    intersection = len(q1_words.intersection(q2_words))
+    union = len(q1_words.union(q2_words))
+    
+    similarity = intersection / union if union > 0 else 0
+    return similarity > 0.6
+
+def is_vague_response(response: str) -> bool:
+    """Detect if an AI response is vague or unhelpful"""
+    vague_indicators = [
+        "it depends", "maybe", "possibly", "perhaps", "i'm not sure",
+        "that's a good question", "there are many ways", "it varies"
+    ]
+    
+    response_lower = response.lower()
+    vague_count = sum(1 for indicator in vague_indicators if indicator in response_lower)
+    
+    # Also check for very short responses
+    word_count = len(response.split())
+    
+    return vague_count >= 2 or word_count < 20
+
+def analyze_conversation_coherence(history: List[Dict]) -> Dict:
+    """Analyze if conversation maintains focus and coherence"""
+    if len(history) < 4:  # Need at least 2 turns
+        return {"coherence_score": 8.0, "issues": []}
+    
+    # Extract topics from each turn
+    topics_per_turn = []
+    for msg in history:
+        if msg.get('role') == 'user':
+            topics = extract_topics_from_text(msg.get('content', ''))
+            topics_per_turn.append(topics)
+    
+    # Calculate topic drift
+    if len(topics_per_turn) < 2:
+        return {"coherence_score": 8.0, "issues": []}
+    
+    coherence_score = calculate_topic_coherence(topics_per_turn)
+    issues = identify_conversation_issues(history)
+    
+    return {
+        "coherence_score": coherence_score,
+        "issues": issues,
+        "topic_drift": len(set(sum(topics_per_turn, []))) / len(topics_per_turn) if topics_per_turn else 1.0,
+        "conversation_depth": {"depth_score": 5.0, "progression": "stable"}
+    }
+
+def generate_conversation_suggestions(analysis: Dict, context: str) -> List[str]:
+    """Generate specific suggestions based on conversation analysis"""
+    suggestions = []
+    issues = analysis.get("issues", [])
+    coherence_score = analysis.get("coherence_score", 8.0)
+    
+    # Issue-specific suggestions
+    if "repetitive_questions" in issues:
+        suggestions.append("🔄 Try rephrasing your question or approaching from a different angle")
+    
+    if "vague_response" in issues:
+        suggestions.append("🎯 Ask for specific examples or step-by-step explanations")
+    
+    if "topic_jumping" in issues:
+        suggestions.append("📍 Focus on one topic at a time for better results")
+    
+    if "potentially_stuck" in issues:
+        suggestions.append("💡 Consider summarizing what you've learned and asking a new question")
+    
+    # Coherence-based suggestions
+    if coherence_score < 6.0:
+        suggestions.append("🧭 Stay focused on your main goal to get better answers")
+    
+    # Context-specific suggestions
+    context_suggestions = {
+        "programming": [
+            "💻 Include specific error messages or code snippets",
+            "🔧 Describe what you've already tried"
+        ],
+        "writing": [
+            "✍️ Specify your target audience and purpose",
+            "📝 Ask for specific feedback on structure or style"
+        ],
+        "learning": [
+            "🎓 Ask for real-world examples to understand better",
+            "📚 Request step-by-step explanations"
+        ]
+    }
+    
+    if context in context_suggestions and len(suggestions) < 3:
+        suggestions.extend(context_suggestions[context][:2])
+    
+    return suggestions[:3]  # Limit to 3 suggestions
+
 # Data models
 class Message(BaseModel):
     role: str
@@ -150,20 +349,36 @@ class MemoryUpdate(BaseModel):
 class PromptAnalysisRequest(BaseModel):
     prompt: str
 
-# NEW: Prompt Improvement Model
 class PromptImprovementRequest(BaseModel):
     prompt: str
     analysis: Dict
+
+# NEW Phase 2: Conversation analysis models
+class ConversationAnalysisRequest(BaseModel):
+    user_message: str
+    assistant_message: str
+    conversation_history: List[Dict] = []
+    conversation_id: Optional[str] = None
+
+class FollowUpRequest(BaseModel):
+    conversation_history: List[Dict]
+    user_goal: Optional[str] = None
+    context: str = "general"
+
+class ConversationQualityRequest(BaseModel):
+    conversation_id: str
+    full_conversation: List[Dict]
 
 # Routes
 @app.get("/")
 async def root():
     return {
-        "status": "ChatGPT Memory Manager API Running",
+        "status": "ChatGPT Memory Manager API with Phase 2 Conversation Flow Optimization",
         "environment": os.getenv("RAILWAY_ENVIRONMENT", "local"),
         "openai_configured": client is not None,
         "chromadb_configured": True,
-        "embedding_model": "text-embedding-3-small" if client else "default"
+        "embedding_model": "text-embedding-3-small" if client else "default",
+        "phase2_features": ["conversation_turn_analysis", "follow_up_suggestions", "flow_optimization"]
     }
 
 @app.get("/health")
@@ -270,7 +485,6 @@ Focus on prompt engineering best practices:
             "analysis": "Using fallback analysis due to API issues"
         }
 
-# NEW: AI-Powered Prompt Improvement Endpoint
 @app.post("/improve_prompt")
 async def improve_prompt(request: PromptImprovementRequest):
     if not client:
@@ -350,6 +564,252 @@ Return ONLY the improved prompt text, no explanations or meta-commentary."""
             "error": "AI improvement temporarily unavailable"
         }
 
+# NEW Phase 2: Conversation Flow Analysis Endpoints
+
+@app.post("/analyze_conversation_turn")
+async def analyze_conversation_turn(request: ConversationAnalysisRequest):
+    """Analyze a single conversation turn for quality and flow"""
+    if not client:
+        raise HTTPException(status_code=503, detail="OpenAI not configured")
+    
+    try:
+        # Combine user message and assistant response for analysis
+        conversation_text = f"User: {request.user_message}\nAssistant: {request.assistant_message}"
+        
+        # Add conversation history for context
+        context_text = ""
+        if request.conversation_history:
+            recent_history = request.conversation_history[-6:]  # Last 3 turns
+            context_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+        
+        # Analyze conversation quality with OpenAI
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are an expert conversation flow analyst. Analyze this conversation turn and provide:
+
+1. A flow quality score (0-10)
+2. Issue identification (if any)
+3. Specific improvement suggestions
+4. Assessment of conversation direction
+
+Focus on:
+- Response relevance and helpfulness
+- Question clarity and specificity  
+- Conversation coherence and focus
+- Depth of exploration
+- Productive conversation patterns
+
+Respond in JSON format:
+{
+  "flow_score": 7.5,
+  "issue_type": "shallow_response" | "off_topic" | "repetitive" | "vague" | "good",
+  "suggestions": ["Ask for specific examples", "Focus on one aspect"],
+  "conversation_direction": "improving" | "declining" | "stable",
+  "analysis": "Brief explanation of the assessment"
+}"""
+                },
+                {
+                    "role": "user", 
+                    "content": f"Recent context:\n{context_text}\n\nCurrent turn:\n{conversation_text}"
+                }
+            ],
+            max_tokens=250,
+            temperature=0.3
+        )
+        
+        ai_analysis = response.choices[0].message.content
+        
+        try:
+            result = json.loads(ai_analysis)
+            
+            # Add local analysis
+            local_analysis = analyze_conversation_coherence(request.conversation_history + [
+                {"role": "user", "content": request.user_message},
+                {"role": "assistant", "content": request.assistant_message}
+            ])
+            
+            # Combine AI and local analysis
+            final_result = {
+                "flow_score": min(10, max(0, float(result.get("flow_score", 7)))),
+                "issue_type": result.get("issue_type", "good"),
+                "suggestions": result.get("suggestions", [])[:3],
+                "conversation_direction": result.get("conversation_direction", "stable"),
+                "analysis": smart_truncate(result.get("analysis", "Analysis complete")),
+                "coherence_score": local_analysis["coherence_score"],
+                "local_issues": local_analysis["issues"],
+                "depth_info": local_analysis["conversation_depth"]
+            }
+            
+            logger.info(f"Conversation turn analyzed: flow_score={final_result['flow_score']}")
+            return final_result
+            
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse conversation analysis JSON")
+            return {
+                "flow_score": 6.0,
+                "issue_type": "analysis_error",
+                "suggestions": ["Continue the conversation naturally"],
+                "conversation_direction": "stable",
+                "analysis": "Analysis temporarily unavailable"
+            }
+            
+    except Exception as e:
+        logger.error(f"Error in conversation turn analysis: {str(e)}")
+        return {
+            "flow_score": 5.0,
+            "issue_type": "error",
+            "suggestions": ["Try rephrasing your question"],
+            "conversation_direction": "stable",
+            "analysis": "Analysis failed - continue conversation"
+        }
+
+@app.post("/suggest_followup")
+async def suggest_followup(request: FollowUpRequest):
+    """Generate intelligent follow-up questions based on conversation context"""
+    if not client:
+        raise HTTPException(status_code=503, detail="OpenAI not configured")
+    
+    try:
+        # Prepare conversation context
+        conversation_text = "\n".join([
+            f"{msg['role']}: {msg['content']}" 
+            for msg in request.conversation_history[-8:]  # Last 4 turns
+        ])
+        
+        # Detect conversation context
+        context = request.context
+        if context == "general" and conversation_text:
+            # Auto-detect context
+            context_analysis = extract_topics_from_text(conversation_text)
+            context = context_analysis[0] if context_analysis else "general"
+        
+        # Generate follow-up with OpenAI
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"""You are an expert at generating follow-up questions that deepen conversations and get better results from AI assistants.
+
+Based on the conversation context, generate 1 excellent follow-up question that:
+1. Builds naturally on the previous response
+2. Seeks deeper, more specific information
+3. Is appropriate for the {context} domain
+4. Would likely lead to a more helpful AI response
+
+Guidelines for {context} context:
+- Programming: Ask for code examples, edge cases, best practices, or specific implementation details
+- Writing: Request feedback on specific aspects, examples, or techniques
+- Learning: Seek clarification, examples, or connections to prior knowledge
+- Business: Ask for specific strategies, metrics, or real-world applications
+
+Return only the follow-up question, no explanations."""
+                },
+                {
+                    "role": "user",
+                    "content": f"Conversation context:\n{conversation_text}\n\nUser goal: {request.user_goal or 'Not specified'}"
+                }
+            ],
+            max_tokens=150,
+            temperature=0.4
+        )
+        
+        followup_question = response.choices[0].message.content.strip()
+        
+        # Clean up the response
+        if followup_question.startswith('"') and followup_question.endswith('"'):
+            followup_question = followup_question[1:-1]
+        
+        logger.info(f"Generated follow-up for {context} context")
+        
+        return {
+            "followup_question": followup_question,
+            "context": context,
+            "confidence": 0.8
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in follow-up suggestion: {str(e)}")
+        
+        # Fallback follow-ups based on context
+        fallback_followups = {
+            "programming": "Can you show me a specific code example of how this would work?",
+            "writing": "What are some specific techniques I could use to improve this?",
+            "learning": "Can you provide a real-world example to help me understand this better?",
+            "business": "What specific metrics should I track to measure success with this approach?",
+            "general": "Can you elaborate on the most important aspect of what you just explained?"
+        }
+        
+        return {
+            "followup_question": fallback_followups.get(context, fallback_followups["general"]),
+            "context": context,
+            "confidence": 0.5,
+            "fallback": True
+        }
+
+@app.post("/analyze_conversation_quality")
+async def analyze_conversation_quality(request: ConversationQualityRequest):
+    """Analyze overall conversation quality and provide comprehensive feedback"""
+    try:
+        conversation = request.full_conversation
+        
+        if len(conversation) < 4:  # Need at least 2 turns
+            return {
+                "overall_score": 7.0,
+                "analysis": "Conversation too short for comprehensive analysis",
+                "suggestions": ["Continue the conversation to get better insights"]
+            }
+        
+        # Comprehensive analysis
+        coherence_analysis = analyze_conversation_coherence(conversation)
+        
+        # Calculate overall metrics
+        user_messages = [msg for msg in conversation if msg.get('role') == 'user']
+        assistant_messages = [msg for msg in conversation if msg.get('role') == 'assistant']
+        
+        # Quality metrics
+        conversation_length = len(conversation)
+        turn_count = len(user_messages)
+        
+        # Overall score calculation
+        factors = {
+            "coherence": coherence_analysis["coherence_score"] * 0.4,
+            "length": min(10, conversation_length / 2) * 0.3,  # Optimal around 10 messages
+            "engagement": min(10, turn_count * 2) * 0.3  # More turns = more engagement
+        }
+        
+        overall_score = sum(factors.values())
+        overall_score = min(10.0, max(0.0, overall_score))
+        
+        # Generate comprehensive suggestions
+        suggestions = generate_conversation_suggestions(coherence_analysis, "general")
+        
+        return {
+            "overall_score": round(overall_score, 1),
+            "coherence_score": coherence_analysis["coherence_score"],
+            "turn_count": turn_count,
+            "issues": coherence_analysis["issues"],
+            "suggestions": suggestions,
+            "analysis": f"Analyzed {turn_count} conversation turns with {overall_score:.1f}/10 overall quality",
+            "metrics": {
+                "conversation_length": conversation_length,
+                "topic_coherence": round(coherence_analysis["coherence_score"], 1),
+                "depth_progression": coherence_analysis["conversation_depth"]["progression"]
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in conversation quality analysis: {str(e)}")
+        return {
+            "overall_score": 5.0,
+            "analysis": "Analysis temporarily unavailable",
+            "suggestions": ["Continue your conversation naturally"]
+        }
+
+# Existing endpoints (unchanged)
 @app.post("/save_conversation")
 async def save_conversation(conversation: Conversation):
     try:
