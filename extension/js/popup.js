@@ -52,6 +52,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     viewMemoryBtn.addEventListener('click', async () => {
-        chrome.tabs.create({url: 'http://localhost:3000'});
+        // Open the Vercel dashboard
+        chrome.tabs.create({url: 'https://frontend-eta-murex-79.vercel.app'});
     });
 });
