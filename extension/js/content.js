@@ -1,5 +1,5 @@
-// Enhanced content script with Unified Coach Panel - Better UX while preserving all features
-console.log('ChatGPT Memory Manager - Unified AI Coach loaded!');
+// Enhanced content script with Unified Coach Panel - Better UX with multiple access points
+console.log('ChatGPT Memory Manager - Unified AI Coach with enhanced accessibility!');
 
 // Existing variables
 let unifiedCoachPanel = null;
@@ -53,6 +53,9 @@ function createUnifiedCoachPanel() {
         transition: all 0.3s ease;
         overflow: hidden;
     `;
+    
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const shortcutText = isMac ? '⌘K' : 'Ctrl+K';
     
     unifiedCoachPanel.innerHTML = `
         <!-- Header -->
@@ -240,7 +243,7 @@ function createUnifiedCoachPanel() {
             font-size: 11px;
             color: #666;
         ">
-            <span>Powered by OpenAI</span>
+            <span>${shortcutText} to toggle • Powered by OpenAI</span>
             <button id="coach-settings-btn" style="
                 background: none;
                 border: none;
@@ -331,7 +334,8 @@ function setupUnifiedPanelHandlers() {
     minimizeBtn.addEventListener('click', togglePanelMinimize);
     closeBtn.addEventListener('click', () => {
         unifiedCoachPanel.style.display = 'none';
-        // Add a floating button to reopen
+        unifiedCoachPanel.setAttribute('data-manually-hidden', 'true');
+        // Show floating button as alternative access
         showFloatingCoachButton();
     });
     
@@ -393,6 +397,8 @@ function togglePanelMinimize() {
 
 function showFloatingCoachButton() {
     let floatingBtn = document.getElementById('floating-coach-btn');
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const shortcutText = isMac ? '⌘K' : 'Ctrl+K';
     
     if (!floatingBtn) {
         floatingBtn = document.createElement('button');
@@ -414,11 +420,15 @@ function showFloatingCoachButton() {
             transition: transform 0.2s;
         `;
         floatingBtn.innerHTML = '🤖';
-        floatingBtn.title = 'Open AI Coach';
+        floatingBtn.title = `Open AI Coach (${shortcutText})`;
         
         floatingBtn.addEventListener('click', () => {
+            if (!unifiedCoachPanel) {
+                createUnifiedCoachPanel();
+            }
             unifiedCoachPanel.style.display = 'block';
-            floatingBtn.remove();
+            unifiedCoachPanel.setAttribute('data-manually-hidden', 'false');
+            floatingBtn.style.display = 'none';
         });
         
         floatingBtn.addEventListener('mouseenter', () => {
@@ -430,6 +440,70 @@ function showFloatingCoachButton() {
         });
         
         document.body.appendChild(floatingBtn);
+    } else {
+        floatingBtn.style.display = 'block';
+    }
+}
+
+// Create persistent sidebar toggle
+function createPersistentToggle() {
+    let toggleBtn = document.getElementById('persistent-coach-toggle');
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const shortcutText = isMac ? '⌘K' : 'Ctrl+K';
+    
+    if (!toggleBtn) {
+        toggleBtn = document.createElement('button');
+        toggleBtn.id = 'persistent-coach-toggle';
+        toggleBtn.style.cssText = `
+            position: fixed;
+            top: 50%;
+            right: 0;
+            transform: translateY(-50%);
+            width: 30px;
+            height: 80px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 8px 0 0 8px;
+            color: white;
+            cursor: pointer;
+            z-index: 9998;
+            font-size: 16px;
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            padding: 8px 4px;
+            box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+        `;
+        toggleBtn.innerHTML = 'AI';
+        toggleBtn.title = `Toggle AI Coach (${shortcutText})`;
+        
+        toggleBtn.addEventListener('click', () => {
+            if (!unifiedCoachPanel) {
+                createUnifiedCoachPanel();
+            }
+            
+            if (unifiedCoachPanel.style.display === 'none') {
+                unifiedCoachPanel.style.display = 'block';
+                unifiedCoachPanel.setAttribute('data-manually-hidden', 'false');
+                const floatingBtn = document.getElementById('floating-coach-btn');
+                if (floatingBtn) floatingBtn.style.display = 'none';
+            } else {
+                unifiedCoachPanel.style.display = 'none';
+                unifiedCoachPanel.setAttribute('data-manually-hidden', 'true');
+            }
+        });
+        
+        toggleBtn.addEventListener('mouseenter', () => {
+            toggleBtn.style.right = '2px';
+            toggleBtn.style.width = '35px';
+        });
+        
+        toggleBtn.addEventListener('mouseleave', () => {
+            toggleBtn.style.right = '0';
+            toggleBtn.style.width = '30px';
+        });
+        
+        document.body.appendChild(toggleBtn);
     }
 }
 
@@ -1243,10 +1317,18 @@ function handleInputChange() {
     }
     
     if (text.length > 0) {
+        // Show panel if hidden (but don't force it open if user closed it)
         if (!unifiedCoachPanel) {
             createUnifiedCoachPanel();
         }
-        unifiedCoachPanel.style.display = 'block';
+        
+        // Only auto-show if it's not manually hidden
+        if (unifiedCoachPanel.getAttribute('data-manually-hidden') !== 'true') {
+            unifiedCoachPanel.style.display = 'block';
+            // Hide floating button when panel auto-shows
+            const floatingBtn = document.getElementById('floating-coach-btn');
+            if (floatingBtn) floatingBtn.style.display = 'none';
+        }
         
         if (text === lastAnalyzedText || isAnalyzing) {
             return;
@@ -1276,11 +1358,21 @@ function handleInputChange() {
         }, 1500);
         
     } else {
-        if (unifiedCoachPanel && !isPanelMinimized) {
-            unifiedCoachPanel.style.display = 'none';
-        }
+        // Don't auto-hide panel when text is empty - let user control it
         lastAnalyzedText = '';
         lastAnalysis = null;
+        
+        // Update prompt tab to show waiting state
+        if (unifiedCoachPanel && unifiedCoachPanel.style.display !== 'none') {
+            const content = unifiedCoachPanel.querySelector('#prompt-analysis-content');
+            if (content) {
+                content.innerHTML = `
+                    <div style="color: #666; font-size: 13px; text-align: center; padding: 20px;">
+                        Start typing to get real-time AI analysis...
+                    </div>
+                `;
+            }
+        }
     }
 }
 
@@ -1302,6 +1394,18 @@ function setupInputMonitoring() {
         
         createUnifiedCoachPanel();
         console.log('🤖 Unified AI Coach ready!');
+        
+        // Show a one-time tip about keyboard shortcut
+        try {
+            const hasShownTip = localStorage.getItem('ai-coach-tip-shown');
+            if (!hasShownTip) {
+                const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+                showTemporaryNotification(`💡 Tip: Press ${isMac ? '⌘K' : 'Ctrl+K'} anytime to toggle AI Coach`, 'info', 6000);
+                localStorage.setItem('ai-coach-tip-shown', 'true');
+            }
+        } catch (e) {
+            // localStorage might not be available in some contexts
+        }
     }
 }
 
@@ -1311,17 +1415,36 @@ function initializePhase2Features() {
     
     startConversationMonitoring();
     
-    // Keyboard shortcut (Ctrl+Shift+C for Coach)
+    // Keyboard shortcut (Cmd+K on Mac, Ctrl+K on Windows)
     document.addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.shiftKey && e.key === 'C') {
+        const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+        const modifier = isMac ? e.metaKey : e.ctrlKey;
+        
+        if (modifier && e.key === 'k') {
             e.preventDefault();
             if (unifiedCoachPanel) {
-                unifiedCoachPanel.style.display = unifiedCoachPanel.style.display === 'none' ? 'block' : 'none';
+                if (unifiedCoachPanel.style.display === 'none') {
+                    unifiedCoachPanel.style.display = 'block';
+                    unifiedCoachPanel.setAttribute('data-manually-hidden', 'false');
+                    // Remove floating button if it exists
+                    const floatingBtn = document.getElementById('floating-coach-btn');
+                    if (floatingBtn) floatingBtn.style.display = 'none';
+                } else {
+                    unifiedCoachPanel.style.display = 'none';
+                    unifiedCoachPanel.setAttribute('data-manually-hidden', 'true');
+                    showFloatingCoachButton();
+                }
+            } else {
+                createUnifiedCoachPanel();
+                unifiedCoachPanel.style.display = 'block';
+                unifiedCoachPanel.setAttribute('data-manually-hidden', 'false');
             }
         }
     });
     
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
     console.log('✅ Phase 2 features initialized!');
+    console.log(`💡 Use ${isMac ? '⌘K' : 'Ctrl+K'} to toggle AI Coach panel`);
 }
 
 // Enhanced initialization
@@ -1329,11 +1452,21 @@ function initializeEnhanced() {
     setupInputMonitoring();
     setInterval(setupInputMonitoring, 3000);
     
+    // Create persistent toggle button
+    createPersistentToggle();
+    
+    // Always show floating button on load
+    setTimeout(() => {
+        showFloatingCoachButton();
+    }, 1000);
+    
     setTimeout(() => {
         initializePhase2Features();
     }, 3000);
     
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
     console.log('🤖 Unified AI Coach with all features ready!');
+    console.log(`💡 Press ${isMac ? '⌘K' : 'Ctrl+K'} to toggle AI Coach`);
 }
 
 // Initialize everything
