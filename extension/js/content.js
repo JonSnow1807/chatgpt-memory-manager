@@ -1,5 +1,5 @@
-// Enhanced content script with REAL OpenAI API analysis and AI-powered prompt improvement
-console.log('ChatGPT Memory Manager with Real AI Analysis and Prompt Improvement loaded!');
+// Enhanced content script with REAL OpenAI API analysis, AI-powered prompt improvement, and minimize functionality
+console.log('ChatGPT Memory Manager with Real AI Analysis, Prompt Improvement, and Minimize Feature loaded!');
 
 let analysisOverlay = null;
 let analysisTimeout = null;
@@ -7,6 +7,7 @@ let currentInput = null;
 let lastAnalyzedText = '';
 let isAnalyzing = false;
 let lastAnalysis = null; // Store the last analysis for the improve button
+let isMinimized = false; // Track minimize state
 
 const API_URL = 'https://chatgpt-memory-manager-production.up.railway.app';
 
@@ -131,6 +132,40 @@ function pasteIntoInput(text) {
     }
 }
 
+// NEW: Toggle minimize state
+function toggleMinimize() {
+    const overlay = analysisOverlay;
+    if (!overlay) return;
+    
+    const content = overlay.querySelector('#analysis-content');
+    const minimizeBtn = overlay.querySelector('#minimize-btn');
+    
+    isMinimized = !isMinimized;
+    
+    if (isMinimized) {
+        // Minimize
+        content.style.display = 'none';
+        overlay.style.width = '200px';
+        overlay.style.height = 'auto';
+        minimizeBtn.innerHTML = '📖';
+        minimizeBtn.title = 'Expand AI Coach';
+        
+        // Add minimized indicator
+        overlay.querySelector('.coach-header').style.opacity = '0.8';
+        
+    } else {
+        // Maximize
+        content.style.display = 'block';
+        overlay.style.width = '380px';
+        overlay.style.height = 'auto';
+        minimizeBtn.innerHTML = '📄';
+        minimizeBtn.title = 'Minimize AI Coach';
+        
+        // Remove minimized indicator
+        overlay.querySelector('.coach-header').style.opacity = '1';
+    }
+}
+
 // Real OpenAI API Analysis
 async function analyzePromptWithOpenAI(promptText) {
     try {
@@ -215,7 +250,7 @@ async function analyzePromptWithOpenAI(promptText) {
     }
 }
 
-// Create analysis overlay UI
+// Create analysis overlay UI with minimize button
 function createAnalysisOverlay() {
     if (analysisOverlay) return analysisOverlay;
     
@@ -241,17 +276,44 @@ function createAnalysisOverlay() {
     `;
     
     overlay.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+        <div class="coach-header" style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; transition: opacity 0.3s;">
             <div style="width: 8px; height: 8px; background: #10a37f; border-radius: 50%;"></div>
             <strong style="color: #2d3748; font-size: 14px;">🤖 AI Prompt Coach</strong>
-            <div style="margin-left: auto; font-size: 10px; color: #666; background: rgba(16, 163, 127, 0.1); padding: 2px 6px; border-radius: 8px;">
-                Powered by OpenAI
+            <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+                <div style="font-size: 10px; color: #666; background: rgba(16, 163, 127, 0.1); padding: 2px 6px; border-radius: 8px;">
+                    Powered by OpenAI
+                </div>
+                <button id="minimize-btn" style="
+                    background: none;
+                    border: none;
+                    cursor: pointer;
+                    font-size: 14px;
+                    padding: 4px;
+                    border-radius: 4px;
+                    transition: background 0.2s;
+                    opacity: 0.7;
+                " title="Minimize AI Coach">📄</button>
             </div>
         </div>
         <div id="analysis-content">
             <div style="color: #666; font-size: 13px;">Start typing to get real AI analysis...</div>
         </div>
     `;
+    
+    // Add minimize button functionality
+    const minimizeBtn = overlay.querySelector('#minimize-btn');
+    minimizeBtn.addEventListener('click', toggleMinimize);
+    
+    // Add hover effect for minimize button
+    minimizeBtn.addEventListener('mouseenter', () => {
+        minimizeBtn.style.background = 'rgba(0, 0, 0, 0.1)';
+        minimizeBtn.style.opacity = '1';
+    });
+    
+    minimizeBtn.addEventListener('mouseleave', () => {
+        minimizeBtn.style.background = 'none';
+        minimizeBtn.style.opacity = '0.7';
+    });
     
     document.body.appendChild(overlay);
     analysisOverlay = overlay;
@@ -264,6 +326,11 @@ function updateAnalysisOverlay(analysis, originalPrompt = '') {
     if (!overlay) return;
     
     const content = overlay.querySelector('#analysis-content');
+    
+    // Don't update content if minimized (but allow initial loading state)
+    if (isMinimized && !analysis.loading) {
+        return;
+    }
     
     if (analysis.loading) {
         content.innerHTML = `
@@ -389,6 +456,7 @@ function updateAnalysisOverlay(analysis, originalPrompt = '') {
                         // Hide overlay after successful paste
                         setTimeout(() => {
                             overlay.style.display = 'none';
+                            isMinimized = false; // Reset minimize state
                         }, 2000);
                     } else {
                         throw new Error('Failed to paste');
@@ -459,6 +527,7 @@ function handleInputChange() {
         // Hide overlay when empty
         if (analysisOverlay) {
             analysisOverlay.style.display = 'none';
+            isMinimized = false; // Reset minimize state when hiding
         }
         lastAnalyzedText = '';
         lastAnalysis = null;
@@ -482,7 +551,7 @@ function setupInputMonitoring() {
         currentInput = input;
         
         createAnalysisOverlay();
-        console.log('🤖 Real OpenAI-powered Prompt Coach with AI Improvement ready!');
+        console.log('🤖 Real OpenAI-powered Prompt Coach with AI Improvement and Minimize Feature ready!');
     }
 }
 
