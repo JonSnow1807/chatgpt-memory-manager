@@ -1,4 +1,4 @@
-// Enhanced content script with real-time prompt analysis for contenteditable
+// Enhanced content script with intelligent contextual suggestions
 console.log('ChatGPT Memory Manager with Prompt Analyzer loaded!');
 
 let analysisOverlay = null;
@@ -25,9 +25,8 @@ function extractConversation() {
     return messages;
 }
 
-// NEW: Find ChatGPT input (handles contenteditable)
+// Find ChatGPT input
 function findChatGPTInput() {
-    // ChatGPT uses contenteditable div
     const selectors = [
         '#prompt-textarea',
         '[data-id="root"] [contenteditable="true"]',
@@ -38,22 +37,149 @@ function findChatGPTInput() {
     for (const selector of selectors) {
         const element = document.querySelector(selector);
         if (element && element.isContentEditable) {
-            console.log('Found ChatGPT contenteditable input:', selector);
             return element;
         }
     }
     return null;
 }
 
-// NEW: Get text from contenteditable div
 function getInputText(element) {
     if (!element) return '';
-    
-    // For contenteditable, use textContent or innerText
     return element.textContent || element.innerText || '';
 }
 
-// NEW: Create analysis overlay UI
+// NEW: Intelligent context detection
+function detectContext(text) {
+    const lower = text.toLowerCase();
+    
+    // Programming/Code context
+    if (lower.match(/\b(code|python|javascript|react|css|html|debug|error|function|variable|api|database)\b/)) {
+        return {
+            type: 'programming',
+            keywords: ['code', 'python', 'javascript', 'react', 'debug', 'error', 'function']
+        };
+    }
+    
+    // Writing/Content context
+    if (lower.match(/\b(write|essay|article|blog|content|grammar|style|tone|email|letter)\b/)) {
+        return {
+            type: 'writing',
+            keywords: ['write', 'essay', 'article', 'content', 'email']
+        };
+    }
+    
+    // Learning/Education context
+    if (lower.match(/\b(learn|explain|understand|teach|study|concept|theory|how does|what is)\b/)) {
+        return {
+            type: 'learning',
+            keywords: ['learn', 'explain', 'understand', 'teach', 'concept']
+        };
+    }
+    
+    // Business/Professional context
+    if (lower.match(/\b(business|marketing|strategy|plan|presentation|meeting|professional|work)\b/)) {
+        return {
+            type: 'business',
+            keywords: ['business', 'marketing', 'strategy', 'presentation']
+        };
+    }
+    
+    // Creative context
+    if (lower.match(/\b(creative|story|poem|design|art|brainstorm|idea|innovative)\b/)) {
+        return {
+            type: 'creative',
+            keywords: ['creative', 'story', 'design', 'brainstorm', 'idea']
+        };
+    }
+    
+    return { type: 'general', keywords: [] };
+}
+
+// NEW: Generate contextual suggestions
+function generateContextualSuggestions(text, context, score) {
+    const suggestions = [];
+    const lower = text.toLowerCase();
+    
+    // Context-specific suggestions
+    switch (context.type) {
+        case 'programming':
+            if (!lower.includes('language') && !lower.includes('python') && !lower.includes('javascript')) {
+                suggestions.push('💻 Specify the programming language you\'re using');
+            }
+            if (!lower.includes('error') && !lower.includes('problem')) {
+                suggestions.push('🐛 Describe the specific error or problem');
+            }
+            if (!lower.includes('code') && score < 6) {
+                suggestions.push('📝 Include the relevant code snippet');
+            }
+            break;
+            
+        case 'writing':
+            if (!lower.includes('tone') && !lower.includes('style')) {
+                suggestions.push('✍️ Specify the tone/style you want (formal, casual, etc.)');
+            }
+            if (!lower.includes('audience') && !lower.includes('for')) {
+                suggestions.push('👥 Mention your target audience');
+            }
+            if (!lower.includes('length') && !lower.includes('words')) {
+                suggestions.push('📏 Specify desired length (words/paragraphs)');
+            }
+            break;
+            
+        case 'learning':
+            if (!lower.includes('level') && !lower.includes('beginner') && !lower.includes('advanced')) {
+                suggestions.push('🎓 Specify your experience level (beginner/intermediate/advanced)');
+            }
+            if (!lower.includes('example')) {
+                suggestions.push('📚 Ask for examples to understand better');
+            }
+            if (!lower.includes('step')) {
+                suggestions.push('🪜 Request step-by-step explanations');
+            }
+            break;
+            
+        case 'business':
+            if (!lower.includes('goal') && !lower.includes('objective')) {
+                suggestions.push('🎯 Clarify your business goal or objective');
+            }
+            if (!lower.includes('industry') && !lower.includes('company')) {
+                suggestions.push('🏢 Mention your industry or company context');
+            }
+            break;
+            
+        case 'creative':
+            if (!lower.includes('style') && !lower.includes('genre')) {
+                suggestions.push('🎨 Specify the style or genre you prefer');
+            }
+            if (!lower.includes('inspiration') && !lower.includes('similar')) {
+                suggestions.push('💡 Mention any inspiration or similar works');
+            }
+            break;
+            
+        default:
+            if (score < 4) {
+                suggestions.push('💡 Be more specific about what you need');
+                suggestions.push('🎯 Add context about your situation');
+            }
+    }
+    
+    // General improvements based on text analysis
+    if (!text.includes('?') && text.length > 20) {
+        suggestions.push('❓ Try phrasing as a clear question');
+    }
+    
+    if (text.length < 20) {
+        suggestions.push('📝 Add more details to get better results');
+    }
+    
+    if (!lower.includes('please') && !lower.includes('can you') && !lower.includes('help')) {
+        suggestions.push('🤝 Start with "Can you help me..." for clarity');
+    }
+    
+    return suggestions.slice(0, 3); // Limit to 3 most relevant suggestions
+}
+
+// Create analysis overlay UI
 function createAnalysisOverlay() {
     if (analysisOverlay) return analysisOverlay;
     
@@ -63,7 +189,7 @@ function createAnalysisOverlay() {
         position: fixed;
         top: 20px;
         right: 20px;
-        width: 320px;
+        width: 340px;
         background: rgba(255, 255, 255, 0.95);
         backdrop-filter: blur(10px);
         border-radius: 12px;
@@ -74,7 +200,7 @@ function createAnalysisOverlay() {
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         display: none;
         transition: all 0.3s ease;
-        max-height: 400px;
+        max-height: 450px;
         overflow-y: auto;
     `;
     
@@ -84,7 +210,7 @@ function createAnalysisOverlay() {
             <strong style="color: #2d3748; font-size: 14px;">✨ Prompt Coach</strong>
         </div>
         <div id="analysis-content">
-            <div style="color: #666; font-size: 13px;">Start typing to see live analysis...</div>
+            <div style="color: #666; font-size: 13px;">Start typing to see intelligent analysis...</div>
         </div>
     `;
     
@@ -93,98 +219,79 @@ function createAnalysisOverlay() {
     return overlay;
 }
 
-// NEW: Enhanced prompt analysis
+// NEW: Enhanced intelligent analysis
 function analyzePrompt(text) {
-    if (!text || text.trim().length < 5) {
+    if (!text || text.trim().length < 3) {
         return {
             score: 0,
-            suggestions: ['✍️ Start typing your prompt...'],
+            suggestions: [],
             strengths: [],
-            tips: []
+            context: { type: 'general', keywords: [] }
         };
     }
     
     const cleanText = text.trim();
-    const analysis = {
-        score: 3.0,
-        suggestions: [],
-        strengths: [],
-        tips: []
-    };
+    const context = detectContext(cleanText);
     
-    // Length analysis
-    if (cleanText.length < 15) {
-        analysis.suggestions.push('📝 Try being more specific and detailed');
-        analysis.score -= 1;
-    } else if (cleanText.length >= 20 && cleanText.length <= 200) {
-        analysis.strengths.push('✅ Good length and detail');
-        analysis.score += 1;
-    } else if (cleanText.length > 200) {
-        analysis.strengths.push('✅ Very detailed prompt');
-        analysis.score += 0.5;
+    let score = 2.0; // Base score
+    const strengths = [];
+    
+    // Length scoring
+    if (cleanText.length >= 15 && cleanText.length <= 150) {
+        strengths.push('✅ Good length');
+        score += 1.5;
+    } else if (cleanText.length > 150) {
+        strengths.push('✅ Very detailed');
+        score += 1;
     }
     
-    // Context indicators
-    const contextWords = ['i am', 'i need', 'my goal', 'context', 'background', 'for my', 'help me', 'i want'];
-    const hasContext = contextWords.some(word => cleanText.toLowerCase().includes(word));
-    if (hasContext) {
-        analysis.strengths.push('✅ Includes personal context');
-        analysis.score += 1;
-    } else if (cleanText.length > 30) {
-        analysis.suggestions.push('💡 Add context: "I need help with..." or "My goal is..."');
+    // Context awareness
+    if (context.keywords.length > 0) {
+        strengths.push(`✅ ${context.type.charAt(0).toUpperCase() + context.type.slice(1)} context detected`);
+        score += 1;
     }
     
-    // Specificity indicators
-    const specificWords = ['specific', 'detailed', 'step by step', 'explain', 'show me', 'how to', 'what is'];
+    // Specificity
+    const specificWords = ['specific', 'exactly', 'precisely', 'detailed', 'step by step'];
     if (specificWords.some(word => cleanText.toLowerCase().includes(word))) {
-        analysis.strengths.push('✅ Asks for specific information');
-        analysis.score += 1;
+        strengths.push('✅ Asks for specificity');
+        score += 1;
     }
     
     // Question format
     if (cleanText.includes('?')) {
-        analysis.strengths.push('✅ Clear question format');
-        analysis.score += 0.5;
-    } else if (cleanText.length > 20) {
-        analysis.tips.push('❓ Consider phrasing as a question');
+        strengths.push('✅ Clear question format');
+        score += 0.5;
     }
     
-    // Examples request
-    if (cleanText.toLowerCase().includes('example')) {
-        analysis.strengths.push('✅ Requests examples');
-        analysis.score += 0.5;
-    } else if (cleanText.length > 40) {
-        analysis.tips.push('📚 Ask for examples to get better responses');
-    }
-    
-    // Format/style instructions
-    const formatWords = ['format', 'style', 'structure', 'organize', 'list', 'bullet points'];
-    if (formatWords.some(word => cleanText.toLowerCase().includes(word))) {
-        analysis.strengths.push('✅ Specifies desired format');
-        analysis.score += 0.5;
-    }
-    
-    // Professional/polite tone
-    const politeWords = ['please', 'could you', 'would you', 'can you help'];
+    // Politeness
+    const politeWords = ['please', 'could you', 'can you', 'would you mind'];
     if (politeWords.some(word => cleanText.toLowerCase().includes(word))) {
-        analysis.strengths.push('✅ Polite and professional');
-        analysis.score += 0.3;
+        strengths.push('✅ Polite tone');
+        score += 0.5;
     }
     
-    // Cap score between 0-10
-    analysis.score = Math.min(10, Math.max(0, analysis.score));
-    
-    // Add general tips based on score
-    if (analysis.score < 5) {
-        analysis.tips.push('🎯 Try: "Can you help me [specific task] for [context]?"');
-    } else if (analysis.score >= 8) {
-        analysis.tips.push('🌟 Excellent prompt! This should get great results.');
+    // Context/background provided
+    const contextWords = ['i am', 'i need', 'my goal', 'background', 'situation', 'working on'];
+    if (contextWords.some(word => cleanText.toLowerCase().includes(word))) {
+        strengths.push('✅ Provides context');
+        score += 1;
     }
     
-    return analysis;
+    // Examples requested
+    if (cleanText.toLowerCase().includes('example')) {
+        strengths.push('✅ Requests examples');
+        score += 0.5;
+    }
+    
+    score = Math.min(10, Math.max(0, score));
+    
+    const suggestions = generateContextualSuggestions(cleanText, context, score);
+    
+    return { score, suggestions, strengths, context };
 }
 
-// NEW: Update analysis overlay with better styling
+// Update analysis overlay
 function updateAnalysisOverlay(analysis) {
     const overlay = analysisOverlay;
     if (!overlay) return;
@@ -204,6 +311,12 @@ function updateAnalysisOverlay(analysis) {
             </div>
         </div>
         
+        ${analysis.context.type !== 'general' ? `
+            <div style="background: rgba(16, 163, 127, 0.1); padding: 6px 10px; border-radius: 6px; margin-bottom: 10px; font-size: 11px; color: #047857;">
+                🧠 Context: ${analysis.context.type.charAt(0).toUpperCase() + analysis.context.type.slice(1)}
+            </div>
+        ` : ''}
+        
         ${analysis.strengths.length > 0 ? `
             <div style="margin-bottom: 10px;">
                 ${analysis.strengths.map(s => `<div style="font-size: 12px; color: #059669; margin-bottom: 3px; line-height: 1.4;">${s}</div>`).join('')}
@@ -211,87 +324,65 @@ function updateAnalysisOverlay(analysis) {
         ` : ''}
         
         ${analysis.suggestions.length > 0 ? `
-            <div style="margin-bottom: 10px;">
-                ${analysis.suggestions.map(s => `<div style="font-size: 12px; color: #d97706; margin-bottom: 3px; line-height: 1.4;">${s}</div>`).join('')}
-            </div>
-        ` : ''}
-        
-        ${analysis.tips.length > 0 ? `
-            <div style="background: rgba(16, 163, 127, 0.1); padding: 8px; border-radius: 6px; margin-top: 8px;">
-                ${analysis.tips.map(s => `<div style="font-size: 11px; color: #047857; margin-bottom: 2px; line-height: 1.4;">${s}</div>`).join('')}
+            <div style="background: rgba(249, 115, 22, 0.1); padding: 8px; border-radius: 6px;">
+                <div style="font-size: 11px; color: #ea580c; font-weight: 600; margin-bottom: 4px;">💡 Suggestions:</div>
+                ${analysis.suggestions.map(s => `<div style="font-size: 11px; color: #ea580c; margin-bottom: 3px; line-height: 1.4;">• ${s}</div>`).join('')}
             </div>
         ` : ''}
     `;
 }
 
-// NEW: Handle input changes for contenteditable
+// Handle input changes
 function handleInputChange() {
     const text = getInputText(currentInput);
     
-    // Clear previous timeout
-    if (analysisTimeout) {
-        clearTimeout(analysisTimeout);
-    }
+    if (analysisTimeout) clearTimeout(analysisTimeout);
     
-    // Show overlay when typing
     if (text.length > 0) {
         createAnalysisOverlay();
         analysisOverlay.style.display = 'block';
         
-        // Debounce analysis (wait 300ms after user stops typing)
         analysisTimeout = setTimeout(() => {
             const analysis = analyzePrompt(text);
             updateAnalysisOverlay(analysis);
-            console.log('Prompt analysis:', { text: text.substring(0, 50) + '...', score: analysis.score });
         }, 300);
     } else {
-        // Hide overlay when empty
         if (analysisOverlay) {
             analysisOverlay.style.display = 'none';
         }
     }
 }
 
-// NEW: Set up input monitoring for contenteditable
+// Set up monitoring
 function setupInputMonitoring() {
     const input = findChatGPTInput();
     
     if (input && input !== currentInput) {
-        console.log('Setting up prompt analysis monitoring for contenteditable...');
-        
-        // Remove previous listeners
         if (currentInput) {
             currentInput.removeEventListener('input', handleInputChange);
             currentInput.removeEventListener('keyup', handleInputChange);
             currentInput.removeEventListener('paste', handleInputChange);
         }
         
-        // Add new listeners for contenteditable
         input.addEventListener('input', handleInputChange);
         input.addEventListener('keyup', handleInputChange);
         input.addEventListener('paste', handleInputChange);
         currentInput = input;
         
-        // Create overlay (hidden initially)
         createAnalysisOverlay();
-        
-        console.log('✨ Prompt analysis ready for contenteditable!');
+        console.log('✨ Intelligent Prompt Coach ready!');
     }
 }
 
-// Initialize when page loads
+// Initialize
 function initialize() {
-    console.log('Initializing prompt analyzer...');
     setupInputMonitoring();
-    
-    // Re-check periodically in case ChatGPT DOM changes
     setInterval(setupInputMonitoring, 3000);
 }
 
-// Start initialization after a short delay
 setTimeout(initialize, 2000);
 
-// Listen for messages from popup (existing functionality)
+// Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'capture') {
         const conversation = extractConversation();
