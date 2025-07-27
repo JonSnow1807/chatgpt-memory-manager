@@ -23,20 +23,16 @@ load_dotenv()
 # Initialize FastAPI
 app = FastAPI()
 
-# AGGRESSIVE CORS FIX - Add this BEFORE the CORS middleware
+# CORS middleware
 @app.middleware("http")
 async def cors_handler(request, call_next):
     response = await call_next(request)
-    
-    # Force CORS headers
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "*"
     response.headers["Access-Control-Allow-Credentials"] = "true"
-    
     return response
 
-# Handle preflight OPTIONS requests
 @app.options("/{path:path}")
 async def options_handler(path: str):
     return JSONResponse(
@@ -48,7 +44,6 @@ async def options_handler(path: str):
         }
     )
 
-# Configure CORS - simplified to allow all
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -65,7 +60,6 @@ try:
     
     client = openai.OpenAI(api_key=api_key)
     
-    # Create OpenAI embedding function for ChromaDB
     openai_ef = embedding_functions.OpenAIEmbeddingFunction(
         api_key=api_key,
         model_name="text-embedding-3-small"
@@ -73,7 +67,6 @@ try:
     logger.info("OpenAI client and embeddings initialized successfully")
 except Exception as e:
     logger.error(f"OpenAI initialization error: {e}")
-    # Fallback to default embeddings
     openai_ef = embedding_functions.DefaultEmbeddingFunction()
     client = None
 
@@ -81,14 +74,11 @@ except Exception as e:
 try:
     if os.getenv("RAILWAY_ENVIRONMENT"):
         logger.info("Running on Railway - using ephemeral ChromaDB")
-        # For Railway, we need a persistent solution
-        # Using ephemeral means data is lost on restart
         chroma_client = chromadb.EphemeralClient()
     else:
         logger.info("Running locally - using persistent ChromaDB")
         chroma_client = chromadb.PersistentClient(path="./memory_db")
     
-    # Create collection with OpenAI embeddings for semantic search
     collection = chroma_client.get_or_create_collection(
         name="chatgpt_memories",
         embedding_function=openai_ef
@@ -117,6 +107,10 @@ class MemoryUpdate(BaseModel):
     summary: str
     title: str
 
+# NEW: Prompt Analysis Model
+class PromptAnalysisRequest(BaseModel):
+    prompt: str
+
 # Routes
 @app.get("/")
 async def root():
@@ -132,22 +126,120 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
+# NEW: Real OpenAI Prompt Analysis Endpoint
+@app.post("/analyze_prompt")
+async def analyze_prompt(request: PromptAnalysisRequest):
+    if not client:
+        raise HTTPException(status_code=503, detail="OpenAI not configured")
+    
+    try:
+        prompt_text = request.prompt.strip()
+        
+        if len(prompt_text) < 3:
+            return {
+                "score": 0,
+                "analysis": "Start typing to get AI-powered analysis...",
+                "suggestions": [],
+                "strengths": [],
+                "context": "general"
+            }
+        
+        # Use GPT-4o-mini for fast, cost-effective analysis
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": """You are an expert prompt engineering coach. Analyze the given prompt and provide:
+
+1. A score from 0-10 (10 being excellent)
+2. Context/domain detection (programming, writing, business, health, legal, finance, travel, cooking, sports, science, technology, gaming, home, relationships, creative, learning, or general)
+3. Specific strengths of the prompt
+4. Actionable suggestions for improvement
+5. Brief analysis explanation
+
+Respond in JSON format:
+{
+  "score": 7.5,
+  "context": "programming", 
+  "strengths": ["Clear question format", "Provides context"],
+  "suggestions": ["Specify programming language", "Include error details"],
+  "analysis": "This prompt shows good structure but could be more specific..."
+}
+
+Focus on prompt engineering best practices:
+- Specificity and clarity
+- Context provision
+- Clear instructions
+- Example requests
+- Appropriate length
+- Question format
+- Politeness
+- Domain-specific needs"""
+                },
+                {
+                    "role": "user",
+                    "content": f"Analyze this prompt: '{prompt_text}'"
+                }
+            ],
+            max_tokens=300,
+            temperature=0.3
+        )
+        
+        # Parse OpenAI response
+        ai_response = response.choices[0].message.content
+        
+        try:
+            # Try to parse JSON response
+            result = json.loads(ai_response)
+            
+            # Validate and clean the response
+            analysis_result = {
+                "score": min(10, max(0, float(result.get("score", 0)))),
+                "context": result.get("context", "general"),
+                "strengths": result.get("strengths", [])[:4],  # Limit to 4
+                "suggestions": result.get("suggestions", [])[:3],  # Limit to 3
+                "analysis": result.get("analysis", "AI analysis completed")[:200]  # Limit length
+            }
+            
+            logger.info(f"Analyzed prompt: score={analysis_result['score']}, context={analysis_result['context']}")
+            return analysis_result
+            
+        except json.JSONDecodeError:
+            # Fallback if JSON parsing fails
+            logger.warning("Failed to parse OpenAI JSON response")
+            return {
+                "score": 5.0,
+                "context": "general",
+                "strengths": ["Processed by AI"],
+                "suggestions": ["AI analysis completed"],
+                "analysis": ai_response[:200]
+            }
+            
+    except Exception as e:
+        logger.error(f"Error in prompt analysis: {str(e)}")
+        # Return fallback analysis
+        return {
+            "score": 3.0,
+            "context": "general", 
+            "strengths": [],
+            "suggestions": ["OpenAI analysis temporarily unavailable"],
+            "analysis": "Using fallback analysis due to API issues"
+        }
+
 @app.post("/save_conversation")
 async def save_conversation(conversation: Conversation):
     try:
-        # Extract conversation text
         conversation_text = "\n".join([
             f"{msg.role}: {msg.content}" 
             for msg in conversation.messages
         ])
         
-        # Generate intelligent summary using GPT-3.5 for better quality
         summary = ""
         key_topics = []
         
         if client:
             try:
-                # Extract summary and key topics
                 response = client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[
@@ -164,7 +256,6 @@ async def save_conversation(conversation: Conversation):
                 
                 full_response = response.choices[0].message.content
                 
-                # Parse response
                 if "Summary:" in full_response and "Topics:" in full_response:
                     parts = full_response.split("Topics:")
                     summary = parts[0].replace("Summary:", "").strip()
@@ -177,16 +268,12 @@ async def save_conversation(conversation: Conversation):
                 logger.error(f"OpenAI API error: {e}")
                 summary = f"Error generating summary: {str(e)}"
         
-        # Fallback summary
         if not summary:
             first_msg = conversation.messages[0].content[:100] if conversation.messages else "Empty conversation"
             summary = f"Conversation starting with: {first_msg}..."
         
-        # Create document with enhanced content for better search
-        # Include summary and topics in the document for semantic search
         enhanced_document = f"{summary}\n\nTopics: {', '.join(key_topics)}\n\nFull conversation:\n{conversation_text}"
         
-        # Store in ChromaDB
         doc_id = str(uuid.uuid4())
         
         metadata = {
@@ -224,14 +311,12 @@ async def search_memory(query: SearchQuery):
     try:
         logger.info(f"Searching for: {query.query}")
         
-        # Search in ChromaDB with semantic search
         results = collection.query(
             query_texts=[query.query],
-            n_results=min(query.limit, 20),  # Get more results for better ranking
+            n_results=min(query.limit, 20),
             include=["documents", "metadatas", "distances"]
         )
         
-        # Format results with relevance scores
         memories = []
         if results and results.get('documents') and results['documents'][0]:
             docs = results['documents'][0]
@@ -239,12 +324,9 @@ async def search_memory(query: SearchQuery):
             distances = results['distances'][0] if results.get('distances') else []
             
             for i in range(len(docs)):
-                # Calculate relevance score (0-1, where 1 is most relevant)
-                # ChromaDB distance is 0-2, where 0 is most similar
                 distance = distances[i] if i < len(distances) else 1.0
                 relevance = max(0, min(1, 1 - (distance / 2)))
                 
-                # Only include results with reasonable relevance
                 if relevance > 0.3:
                     memories.append({
                         "content": docs[i][:300] + "..." if len(docs[i]) > 300 else docs[i],
@@ -253,10 +335,7 @@ async def search_memory(query: SearchQuery):
                         "distance": distance
                     })
             
-            # Sort by relevance
             memories.sort(key=lambda x: x['relevance'], reverse=True)
-            
-            # Limit to requested number
             memories = memories[:query.limit]
         
         logger.info(f"Found {len(memories)} relevant results")
@@ -269,7 +348,6 @@ async def search_memory(query: SearchQuery):
 @app.get("/get_all_memories")
 async def get_all_memories():
     try:
-        # Get all documents
         all_data = collection.get()
         
         memories = []
@@ -283,7 +361,6 @@ async def get_all_memories():
                     "topics": []
                 }
                 
-                # Safely extract metadata
                 if all_data.get('metadatas') and i < len(all_data['metadatas']):
                     metadata = all_data['metadatas'][i]
                     memory_data.update({
@@ -295,7 +372,6 @@ async def get_all_memories():
                 
                 memories.append(memory_data)
         
-        # Sort by timestamp (newest first)
         memories.sort(key=lambda x: x['timestamp'], reverse=True)
         
         return {"memories": memories, "total": len(memories)}
@@ -317,18 +393,15 @@ async def delete_memory(memory_id: str):
 @app.put("/update_memory/{memory_id}")
 async def update_memory(memory_id: str, update: MemoryUpdate):
     try:
-        # Get existing memory
         existing = collection.get(ids=[memory_id])
         
         if not existing or not existing.get('ids'):
             raise HTTPException(status_code=404, detail="Memory not found")
         
-        # Update metadata
         metadata = existing['metadatas'][0]
         metadata['summary'] = update.summary
         metadata['title'] = update.title
         
-        # Update the document
         collection.update(
             ids=[memory_id],
             metadatas=[metadata]
