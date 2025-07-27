@@ -5,11 +5,6 @@ import { format } from 'date-fns';
 import './App.css';
 import { API_URL } from './config';
 
-// ADD THIS DEBUG LOG
-console.log('🔍 DEBUG: API_URL being used:', API_URL);
-console.log('🔍 DEBUG: Environment:', process.env.NODE_ENV);
-console.log('🔍 DEBUG: REACT_APP_API_URL:', process.env.REACT_APP_API_URL);
-
 interface Memory {
   id: string;
   summary: string;
@@ -48,6 +43,11 @@ function App() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   useEffect(() => {
+    // Debug logs moved inside useEffect
+    console.log('🔍 DEBUG: API_URL being used:', API_URL);
+    console.log('🔍 DEBUG: Environment:', process.env.NODE_ENV);
+    console.log('🔍 DEBUG: REACT_APP_API_URL:', process.env.REACT_APP_API_URL);
+    
     loadMemories();
   }, []);
 
@@ -70,7 +70,6 @@ function App() {
     }
   };
 
-  // ... rest of your component stays the same ...
   const calculateStats = (mems: Memory[]) => {
     if (mems.length === 0) return;
 
