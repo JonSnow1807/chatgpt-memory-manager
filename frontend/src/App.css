@@ -421,3 +421,29 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Make relevance badge fully visible and attractive */
+.relevance-badge {
+  position: absolute;
+  top: -16px;
+  right: 16px;
+  padding: 8px 16px;
+  border-radius: 20px;
+  color: white;
+  font-size: 0.9rem;
+  font-weight: 700;
+  z-index: 20;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  border: 3px solid white;
+  background: linear-gradient(135deg, #10a37f 0%, #0d8f70 100%);
+}
+
+/* Ensure memory cards don't clip the badge */
+.memory-card {
+  overflow: visible !important;
+  margin-top: 20px;
+}
+
+.memory-grid {
+  margin-top: 20px;
+}
