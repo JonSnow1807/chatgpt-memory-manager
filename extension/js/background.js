@@ -1,5 +1,5 @@
 // Production backend URL
-const BACKEND_URL = 'https://chatgpt-memory-manager-production-up.railway.app';
+const BACKEND_URL = 'https://chatgpt-memory-manager-production.up.railway.app';
 
 // Handle API calls from popup to bypass CORS
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -42,11 +42,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     
     if (request.action === 'openDashboard') {
-        chrome.tabs.create({url: 'https://chatgpt-memory-manager.vercel.app'});
+        chrome.tabs.create({url: 'https://frontend-eta-murex-79.vercel.app'});
     }
 });
 
 console.log('Background script loaded with backend:', BACKEND_URL);
-
-// Dashboard URL
-const DASHBOARD_URL = 'https://frontend-eta-murex-79.vercel.app';
