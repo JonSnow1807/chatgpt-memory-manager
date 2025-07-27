@@ -5,6 +5,11 @@ import { format } from 'date-fns';
 import './App.css';
 import { API_URL } from './config';
 
+// ADD THIS DEBUG LOG
+console.log('🔍 DEBUG: API_URL being used:', API_URL);
+console.log('🔍 DEBUG: Environment:', process.env.NODE_ENV);
+console.log('🔍 DEBUG: REACT_APP_API_URL:', process.env.REACT_APP_API_URL);
+
 interface Memory {
   id: string;
   summary: string;
@@ -49,21 +54,26 @@ function App() {
   const loadMemories = async () => {
     try {
       setLoading(true);
+      console.log('🔍 DEBUG: Attempting to load memories from:', `${API_URL}/get_all_memories`);
+      
       const response = await axios.get(`${API_URL}/get_all_memories`);
+      console.log('🔍 DEBUG: API Response:', response.data);
+      
       setMemories(response.data.memories);
       setTotalMemories(response.data.total);
       calculateStats(response.data.memories);
     } catch (error) {
-      console.error('Error loading memories:', error);
+      console.error('❌ ERROR loading memories:', error);
+      console.error('❌ ERROR details:', error.response?.data);
     } finally {
       setLoading(false);
     }
   };
 
+  // ... rest of your component stays the same ...
   const calculateStats = (mems: Memory[]) => {
     if (mems.length === 0) return;
 
-    // Extract topics from all memories
     const allTopics: string[] = [];
     mems.forEach(m => {
       if (m.topics && Array.isArray(m.topics)) {
@@ -71,7 +81,6 @@ function App() {
       }
     });
     
-    // Count topic frequency
     const topicCount: { [key: string]: number } = {};
     allTopics.forEach(topic => {
       topicCount[topic] = (topicCount[topic] || 0) + 1;
@@ -114,7 +123,7 @@ function App() {
     try {
       await axios.delete(`${API_URL}/delete_memory/${memoryId}`);
       setDeleteConfirm(null);
-      loadMemories(); // Reload the list
+      loadMemories();
     } catch (error) {
       console.error('Error deleting memory:', error);
     }
@@ -171,7 +180,6 @@ function App() {
       </header>
 
       <main className="main-content">
-        {/* Stats Panel */}
         {showStats && stats && (
           <div className="stats-panel">
             <h3>Memory Statistics</h3>
@@ -208,7 +216,6 @@ function App() {
           </div>
         )}
 
-        {/* Search Section */}
         <div className="search-section">
           <div className="search-container">
             <Search size={20} className="search-icon" />
@@ -242,7 +249,6 @@ function App() {
           )}
         </div>
 
-        {/* Search Results */}
         {searchResults.length > 0 && (
           <div className="section">
             <h2>Search Results</h2>
@@ -275,7 +281,6 @@ function App() {
           </div>
         )}
 
-        {/* Recent Memories */}
         <div className="section">
           <div className="section-header">
             <h2>Recent Memories</h2>
