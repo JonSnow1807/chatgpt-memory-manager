@@ -9,6 +9,7 @@
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
+    "https://chatgpt-memory-manager-production.up.railway.app/*",
     "http://localhost:8000/*",
     "http://localhost:3000/*"
   ],
