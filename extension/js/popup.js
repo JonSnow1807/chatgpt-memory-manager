@@ -20,7 +20,21 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
             
+            // Check if we're on ChatGPT
+            if (!tab.url.includes('chatgpt.com')) {
+                status.textContent = 'Please go to chatgpt.com first';
+                status.style.backgroundColor = '#f4d4d4';
+                return;
+            }
+            
             chrome.tabs.sendMessage(tab.id, {action: 'capture'}, (response) => {
+                // Handle connection error
+                if (chrome.runtime.lastError) {
+                    status.textContent = 'Please refresh ChatGPT page and try again';
+                    status.style.backgroundColor = '#f4d4d4';
+                    return;
+                }
+                
                 if (response && response.conversation) {
                     status.textContent = `Saving ${response.conversation.length} messages...`;
                     
@@ -44,15 +58,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                 } else {
                     status.textContent = 'No conversation found';
+                    status.style.backgroundColor = '#f4d4d4';
                 }
             });
         } catch (error) {
             status.textContent = 'Error: ' + error.message;
+            status.style.backgroundColor = '#f4d4d4';
         }
     });
     
     viewMemoryBtn.addEventListener('click', async () => {
-        // Open the Vercel dashboard
         chrome.tabs.create({url: 'https://frontend-eta-murex-79.vercel.app'});
     });
 });
