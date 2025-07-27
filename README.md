@@ -45,3 +45,4 @@ This project demonstrates:
 - Export to Notion/Obsidian
 - Mobile app companion
 - Fine-tuned model for better summaries
+// Clean deployment Sun Jul 27 01:25:57 EDT 2025
