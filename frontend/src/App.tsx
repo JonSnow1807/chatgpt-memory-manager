@@ -22,7 +22,6 @@ interface SearchResult {
     title: string;
     topics?: string;
   };
-  relevance: number;
   distance?: number;
 }
 
@@ -138,9 +137,6 @@ function App() {
     link.click();
   };
 
-  const getRelevanceColor = (relevance: number) => {
-    if (relevance > 0.8) return '#10a37f';
-    if (relevance > 0.6) return '#ffa500';
     return '#666';
   };
 
