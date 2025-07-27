@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict
 import chromadb
-from chromadb.utils import embedding_functions
+from chromadb.config import Settings
 import openai
 from dotenv import load_dotenv
 import os
@@ -26,21 +26,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize ChromaDB for vector storage
-chroma_client = chromadb.PersistentClient(path="./memory_db")
-openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    model_name="text-embedding-3-small"
-)
+# Initialize ChromaDB - use in-memory for production
+if os.getenv("RAILWAY_ENVIRONMENT"):
+    # Railway deployment - use in-memory
+    chroma_client = chromadb.Client(Settings(
+        chroma_db_impl="duckdb+parquet",
+        persist_directory="/tmp/chroma_db",
+        anonymized_telemetry=False
+    ))
+else:
+    # Local development - use persistent
+    chroma_client = chromadb.PersistentClient(path="./memory_db")
+
+# Initialize OpenAI
+client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Use default embedding function to avoid OpenAI costs during setup
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+default_ef = DefaultEmbeddingFunction()
 
 # Get or create collection
 collection = chroma_client.get_or_create_collection(
     name="chatgpt_memories",
-    embedding_function=openai_ef
+    embedding_function=default_ef
 )
-
-# Initialize OpenAI
-client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Data models
 class Message(BaseModel):
@@ -60,7 +69,7 @@ class SearchQuery(BaseModel):
 # Routes
 @app.get("/")
 async def root():
-    return {"status": "ChatGPT Memory Manager API Running"}
+    return {"status": "ChatGPT Memory Manager API Running", "environment": os.getenv("RAILWAY_ENVIRONMENT", "local")}
 
 @app.post("/save_conversation")
 async def save_conversation(conversation: Conversation):
@@ -72,16 +81,19 @@ async def save_conversation(conversation: Conversation):
         ])
         
         # Generate summary using GPT-3.5
-        summary_response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Extract key facts, preferences, and important information from this conversation. Be concise."},
-                {"role": "user", "content": conversation_text}
-            ],
-            max_tokens=200
-        )
-        
-        summary = summary_response.choices[0].message.content
+        try:
+            summary_response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Extract key facts, preferences, and important information from this conversation. Be concise."},
+                    {"role": "user", "content": conversation_text}
+                ],
+                max_tokens=200
+            )
+            summary = summary_response.choices[0].message.content
+        except Exception as e:
+            # Fallback if OpenAI fails
+            summary = f"Conversation starting with: {conversation.messages[0].content[:100]}..."
         
         # Store in ChromaDB
         doc_id = str(uuid.uuid4())
@@ -124,7 +136,7 @@ async def search_memory(query: SearchQuery):
                 memories.append({
                     "content": results['documents'][0][i][:200] + "...",
                     "metadata": results['metadatas'][0][i],
-                    "relevance": 1 - results['distances'][0][i]
+                    "relevance": 1 - results['distances'][0][i] if results['distances'][0][i] else 0.9
                 })
         
         return {"memories": memories}
@@ -139,13 +151,17 @@ async def get_all_memories():
         all_data = collection.get()
         
         memories = []
-        for i in range(len(all_data['ids'])):
-            memories.append({
-                "id": all_data['ids'][i],
-                "summary": all_data['metadatas'][i].get('summary', ''),
-                "timestamp": all_data['metadatas'][i].get('timestamp', ''),
-                "title": all_data['metadatas'][i].get('title', 'Untitled')
-            })
+        if all_data and all_data.get('ids'):
+            for i in range(len(all_data['ids'])):
+                memories.append({
+                    "id": all_data['ids'][i],
+                    "summary": all_data['metadatas'][i].get('summary', ''),
+                    "timestamp": all_data['metadatas'][i].get('timestamp', ''),
+                    "title": all_data['metadatas'][i].get('title', 'Untitled')
+                })
+        
+        # Sort by timestamp (newest first)
+        memories.sort(key=lambda x: x['timestamp'], reverse=True)
         
         return {"memories": memories, "total": len(memories)}
         
@@ -154,4 +170,5 @@ async def get_all_memories():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
