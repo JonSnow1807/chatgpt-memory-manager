@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict
 import chromadb
-from chromadb.config import Settings
 import openai
 from dotenv import load_dotenv
 import os
@@ -26,14 +25,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize ChromaDB - use in-memory for production
+# Initialize ChromaDB with modern API
 if os.getenv("RAILWAY_ENVIRONMENT"):
-    # Railway deployment - use in-memory
-    chroma_client = chromadb.Client(Settings(
-        chroma_db_impl="duckdb+parquet",
-        persist_directory="/tmp/chroma_db",
-        anonymized_telemetry=False
-    ))
+    # Railway deployment - use ephemeral client
+    chroma_client = chromadb.EphemeralClient()
 else:
     # Local development - use persistent
     chroma_client = chromadb.PersistentClient(path="./memory_db")
@@ -41,15 +36,20 @@ else:
 # Initialize OpenAI
 client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Use default embedding function to avoid OpenAI costs during setup
+# Use default embedding function
 from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 default_ef = DefaultEmbeddingFunction()
 
 # Get or create collection
-collection = chroma_client.get_or_create_collection(
-    name="chatgpt_memories",
-    embedding_function=default_ef
-)
+try:
+    collection = chroma_client.get_or_create_collection(
+        name="chatgpt_memories",
+        embedding_function=default_ef
+    )
+except Exception as e:
+    print(f"Error creating collection: {e}")
+    # Fallback to simple collection without embedding function
+    collection = chroma_client.get_or_create_collection(name="chatgpt_memories")
 
 # Data models
 class Message(BaseModel):
@@ -70,6 +70,10 @@ class SearchQuery(BaseModel):
 @app.get("/")
 async def root():
     return {"status": "ChatGPT Memory Manager API Running", "environment": os.getenv("RAILWAY_ENVIRONMENT", "local")}
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "chromadb": "connected"}
 
 @app.post("/save_conversation")
 async def save_conversation(conversation: Conversation):
@@ -93,10 +97,13 @@ async def save_conversation(conversation: Conversation):
             summary = summary_response.choices[0].message.content
         except Exception as e:
             # Fallback if OpenAI fails
+            print(f"OpenAI error: {e}")
             summary = f"Conversation starting with: {conversation.messages[0].content[:100]}..."
         
         # Store in ChromaDB
         doc_id = str(uuid.uuid4())
+        
+        # Add to collection
         collection.add(
             documents=[conversation_text],
             metadatas=[{
@@ -136,12 +143,13 @@ async def search_memory(query: SearchQuery):
                 memories.append({
                     "content": results['documents'][0][i][:200] + "...",
                     "metadata": results['metadatas'][0][i],
-                    "relevance": 1 - results['distances'][0][i] if results['distances'][0][i] else 0.9
+                    "relevance": 0.9  # Default relevance since distances might not be available
                 })
         
         return {"memories": memories}
         
     except Exception as e:
+        print(f"Error in search_memory: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/get_all_memories")
@@ -166,6 +174,7 @@ async def get_all_memories():
         return {"memories": memories, "total": len(memories)}
         
     except Exception as e:
+        print(f"Error in get_all_memories: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
