@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Search, Brain, Calendar, RefreshCw, MessageCircle, Download, BarChart } from 'lucide-react';
+import { Search, Brain, Calendar, RefreshCw, MessageCircle, Download, BarChart, Trash2, X } from 'lucide-react';
 import { format } from 'date-fns';
 import './App.css';
+import { API_URL } from './config';
 
 interface Memory {
   id: string;
   summary: string;
   timestamp: string;
   title: string;
+  topics?: string[];
 }
 
 interface SearchResult {
@@ -17,8 +19,10 @@ interface SearchResult {
     summary: string;
     timestamp: string;
     title: string;
+    topics?: string;
   };
   relevance: number;
+  distance?: number;
 }
 
 interface Stats {
@@ -36,8 +40,7 @@ function App() {
   const [totalMemories, setTotalMemories] = useState(0);
   const [showStats, setShowStats] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
-
-  const API_URL = 'http://localhost:8000';
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   useEffect(() => {
     loadMemories();
@@ -60,26 +63,29 @@ function App() {
   const calculateStats = (mems: Memory[]) => {
     if (mems.length === 0) return;
 
-    // Extract topics from summaries
-    const words = mems
-      .map(m => m.summary.toLowerCase().split(' '))
-      .flat()
-      .filter(word => word.length > 4);
+    // Extract topics from all memories
+    const allTopics: string[] = [];
+    mems.forEach(m => {
+      if (m.topics && Array.isArray(m.topics)) {
+        allTopics.push(...m.topics);
+      }
+    });
     
-    const wordCount: { [key: string]: number } = {};
-    words.forEach(word => {
-      wordCount[word] = (wordCount[word] || 0) + 1;
+    // Count topic frequency
+    const topicCount: { [key: string]: number } = {};
+    allTopics.forEach(topic => {
+      topicCount[topic] = (topicCount[topic] || 0) + 1;
     });
 
-    const topWords = Object.entries(wordCount)
+    const topTopics = Object.entries(topicCount)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
-      .map(([word]) => word);
+      .map(([topic]) => topic);
 
     setStats({
       totalConversations: mems.length,
       averageLength: Math.round(mems.reduce((acc, m) => acc + m.summary.length, 0) / mems.length),
-      mostCommonTopics: topWords,
+      mostCommonTopics: topTopics,
       lastCaptured: mems[0]?.timestamp || 'Never'
     });
   };
@@ -104,6 +110,16 @@ function App() {
     }
   };
 
+  const deleteMemory = async (memoryId: string) => {
+    try {
+      await axios.delete(`${API_URL}/delete_memory/${memoryId}`);
+      setDeleteConfirm(null);
+      loadMemories(); // Reload the list
+    } catch (error) {
+      console.error('Error deleting memory:', error);
+    }
+  };
+
   const exportMemories = () => {
     const exportData = {
       exportDate: new Date().toISOString(),
@@ -121,6 +137,12 @@ function App() {
     link.href = url;
     link.download = `chatgpt-memories-${format(new Date(), 'yyyy-MM-dd')}.json`;
     link.click();
+  };
+
+  const getRelevanceColor = (relevance: number) => {
+    if (relevance > 0.8) return '#10a37f';
+    if (relevance > 0.6) return '#ffa500';
+    return '#666';
   };
 
   return (
@@ -171,11 +193,15 @@ function App() {
                 </span>
               </div>
               <div className="stat-item">
-                <span className="stat-label">Common Topics</span>
+                <span className="stat-label">Top Topics</span>
                 <div className="topic-tags">
-                  {stats.mostCommonTopics.map(topic => (
-                    <span key={topic} className="topic-tag">{topic}</span>
-                  ))}
+                  {stats.mostCommonTopics.length > 0 ? (
+                    stats.mostCommonTopics.map(topic => (
+                      <span key={topic} className="topic-tag">{topic}</span>
+                    ))
+                  ) : (
+                    <span className="no-topics">No topics yet</span>
+                  )}
                 </div>
               </div>
             </div>
@@ -188,7 +214,7 @@ function App() {
             <Search size={20} className="search-icon" />
             <input
               type="text"
-              placeholder="Search your ChatGPT memories..."
+              placeholder="Search your ChatGPT memories semantically..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && searchMemories()}
@@ -197,7 +223,23 @@ function App() {
             <button onClick={searchMemories} className="search-button">
               Search
             </button>
+            {searchQuery && (
+              <button 
+                onClick={() => {
+                  setSearchQuery('');
+                  setSearchResults([]);
+                }} 
+                className="clear-button"
+              >
+                <X size={16} />
+              </button>
+            )}
           </div>
+          {searchQuery && (
+            <p className="search-hint">
+              Using AI semantic search - try searching for concepts, not just keywords!
+            </p>
+          )}
         </div>
 
         {/* Search Results */}
@@ -207,10 +249,22 @@ function App() {
             <div className="memory-grid">
               {searchResults.map((result, index) => (
                 <div key={index} className="memory-card search-result">
-                  <div className="relevance-indicator" style={{width: `${result.relevance * 100}%`}} />
+                  <div 
+                    className="relevance-badge" 
+                    style={{ backgroundColor: getRelevanceColor(result.relevance) }}
+                  >
+                    {Math.round(result.relevance * 100)}% match
+                  </div>
                   <h3>{result.metadata.title}</h3>
                   <p className="summary">{result.metadata.summary}</p>
-                  <p className="content-preview">{result.content}</p>
+                  <div className="content-preview">{result.content.substring(0, 150)}...</div>
+                  {result.metadata.topics && (
+                    <div className="memory-topics">
+                      {JSON.parse(result.metadata.topics).map((topic: string) => (
+                        <span key={topic} className="topic-tag small">{topic}</span>
+                      ))}
+                    </div>
+                  )}
                   <div className="memory-meta">
                     <Calendar size={14} />
                     <span>{format(new Date(result.metadata.timestamp), 'MMM d, yyyy')}</span>
@@ -242,8 +296,35 @@ function App() {
             <div className="memory-grid">
               {memories.slice(0, 12).map((memory) => (
                 <div key={memory.id} className="memory-card">
-                  <h3>{memory.title}</h3>
+                  <div className="memory-header">
+                    <h3>{memory.title}</h3>
+                    <button 
+                      className="delete-button"
+                      onClick={() => setDeleteConfirm(memory.id)}
+                      title="Delete memory"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                  {deleteConfirm === memory.id && (
+                    <div className="delete-confirm">
+                      <p>Delete this memory?</p>
+                      <button onClick={() => deleteMemory(memory.id)} className="confirm-delete">
+                        Yes, delete
+                      </button>
+                      <button onClick={() => setDeleteConfirm(null)} className="cancel-delete">
+                        Cancel
+                      </button>
+                    </div>
+                  )}
                   <p className="summary">{memory.summary}</p>
+                  {memory.topics && memory.topics.length > 0 && (
+                    <div className="memory-topics">
+                      {memory.topics.map(topic => (
+                        <span key={topic} className="topic-tag small">{topic}</span>
+                      ))}
+                    </div>
+                  )}
                   <div className="memory-meta">
                     <Calendar size={14} />
                     <span>{format(new Date(memory.timestamp), 'MMM d, yyyy h:mm a')}</span>
