@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import chromadb
@@ -22,19 +23,37 @@ load_dotenv()
 # Initialize FastAPI
 app = FastAPI()
 
-# Configure CORS
+# AGGRESSIVE CORS FIX - Add this BEFORE the CORS middleware
+@app.middleware("http")
+async def cors_handler(request, call_next):
+    response = await call_next(request)
+    
+    # Force CORS headers
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    
+    return response
+
+# Handle preflight OPTIONS requests
+@app.options("/{path:path}")
+async def options_handler(path: str):
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+# Configure CORS - simplified to allow all
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://frontend-eta-murex-79.vercel.app",
-        "https://chatgpt.com", 
-        "https://chat.openai.com",
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "*"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -122,7 +141,7 @@ async def save_conversation(conversation: Conversation):
             for msg in conversation.messages
         ])
         
-        # Generate intelligent summary using GPT-4 for better quality
+        # Generate intelligent summary using GPT-3.5 for better quality
         summary = ""
         key_topics = []
         
