@@ -244,8 +244,7 @@ function App() {
             <h2>Search Results</h2>
             <div className="memory-grid">
               {searchResults.map((result, index) => (
-                <div key={index} className="memory-card search-result">
-                  <div 
+                <div key={index} className="memory-card search-result"> 
                   <h3>{result.metadata.title}</h3>
                   <p className="summary">{result.metadata.summary}</p>
                   <div className="content-preview">{result.content.substring(0, 150)}...</div>
