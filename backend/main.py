@@ -88,6 +88,46 @@ except Exception as e:
     logger.error(f"ChromaDB initialization error: {e}")
     raise
 
+# Utility function for smart text truncation
+def smart_truncate(text, max_length=350):
+    """Truncate text at sentence boundary, not mid-sentence"""
+    if len(text) <= max_length:
+        return text
+    
+    # First, try to find a good sentence boundary within a reasonable range
+    truncated = text[:max_length]
+    
+    # Look for sentence endings (including those followed by quotes)
+    import re
+    sentence_patterns = [
+        r'\.[\"\']?\s',  # Period followed by optional quote and space
+        r'![\"\']?\s',   # Exclamation followed by optional quote and space
+        r'\?[\"\']?\s',  # Question mark followed by optional quote and space
+        r'\.\s',         # Period followed by space
+        r'!\s',          # Exclamation followed by space
+        r'\?\s'          # Question mark followed by space
+    ]
+    
+    best_end = -1
+    for pattern in sentence_patterns:
+        matches = list(re.finditer(pattern, truncated))
+        if matches:
+            last_match = matches[-1]
+            end_pos = last_match.end() - 1  # Don't include the trailing space
+            if end_pos > max_length * 0.5:  # Must be at least halfway through
+                best_end = max(best_end, end_pos)
+    
+    if best_end > 0:
+        return text[:best_end + 1].rstrip()
+    
+    # Fallback: find last complete word
+    last_space = truncated.rfind(' ')
+    if last_space > max_length * 0.7:
+        return text[:last_space] + "..."
+    
+    # Last resort: just cut at max length with ellipsis
+    return text[:max_length].rstrip() + "..."
+
 # Data models
 class Message(BaseModel):
     role: str
@@ -199,7 +239,7 @@ Focus on prompt engineering best practices:
                 "context": result.get("context", "general"),
                 "strengths": result.get("strengths", [])[:4],  # Limit to 4
                 "suggestions": result.get("suggestions", [])[:3],  # Limit to 3
-                "analysis": result.get("analysis", "AI analysis completed")[:200]  # Limit length
+                "analysis": smart_truncate(result.get("analysis", "AI analysis completed"))  # Smart truncation
             }
             
             logger.info(f"Analyzed prompt: score={analysis_result['score']}, context={analysis_result['context']}")
@@ -213,7 +253,7 @@ Focus on prompt engineering best practices:
                 "context": "general",
                 "strengths": ["Processed by AI"],
                 "suggestions": ["AI analysis completed"],
-                "analysis": ai_response[:200]
+                "analysis": smart_truncate(ai_response)  # Smart truncation for fallback too
             }
             
     except Exception as e:
