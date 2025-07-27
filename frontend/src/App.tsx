@@ -246,11 +246,6 @@ function App() {
               {searchResults.map((result, index) => (
                 <div key={index} className="memory-card search-result">
                   <div 
-                    className="relevance-badge" 
-                    style={{ backgroundColor: getRelevanceColor(result.relevance) }}
-                  >
-                    {Math.round(result.relevance * 100)}% match
-                  </div>
                   <h3>{result.metadata.title}</h3>
                   <p className="summary">{result.metadata.summary}</p>
                   <div className="content-preview">{result.content.substring(0, 150)}...</div>
