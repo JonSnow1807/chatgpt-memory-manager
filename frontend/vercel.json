@@ -1,6 +1,6 @@
 {
+  "installCommand": "npm install",
   "buildCommand": "npm run build",
   "outputDirectory": "build",
-  "framework": "create-react-app",
-  "ignoreCommand": "exit 1"
+  "framework": "create-react-app"
 }
