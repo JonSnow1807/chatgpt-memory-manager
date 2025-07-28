@@ -4,6 +4,8 @@ import { Search, Brain, Calendar, RefreshCw, MessageCircle, Download, BarChart, 
 import { format } from 'date-fns';
 import './App.css';
 
+console.log('APP VERSION 2.0 - USER ISOLATION ACTIVE');
+
 const API_URL = 'https://chatgpt-memory-manager-production.up.railway.app';
 
 interface Memory {
@@ -229,7 +231,7 @@ function App() {
         <div className="header-content">
           <div className="title-section">
             <Brain size={32} className="logo" />
-            <h1>ChatGPT Memory Manager</h1>
+            <h1>ChatGPT Memory Manager v2.0</h1>
             <span style={{ fontSize: '12px', opacity: 0.7, marginLeft: '10px' }}>
               Your Private Memory Space
             </span>
