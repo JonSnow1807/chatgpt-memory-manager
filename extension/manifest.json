@@ -1,17 +1,20 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT Memory Manager",
-  "version": "1.0",
-  "description": "Intelligently saves and recalls your ChatGPT conversations",
+  "name": "ChatGPT Spark",
+  "version": "1.0.0",
+  "description": "Ignite better conversations with AI. Real-time analysis, smart suggestions, and conversation memory.",
+  "icons": {
+    "16": "images/icon16.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+  },
   "permissions": [
     "storage",
     "tabs"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
-    "https://chatgpt-memory-manager-production.up.railway.app/*",
-    "http://localhost:8000/*",
-    "http://localhost:3000/*"
+    "https://chatgpt-memory-manager-production.up.railway.app/*"
   ],
   "background": {
     "service_worker": "js/background.js"
@@ -29,6 +32,9 @@
       "16": "images/icon16.png",
       "48": "images/icon48.png",
       "128": "images/icon128.png"
-    }
-  }
+    },
+    "default_title": "ChatGPT Spark - Click to ignite!"
+  },
+  "author": "Your Name",
+  "homepage_url": "https://github.com/JonSnow1807/chatgpt-spark"
 }

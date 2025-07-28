@@ -397,7 +397,7 @@ class ConversationQualityRequest(BaseModel):
 @app.get("/")
 async def root():
     return {
-        "status": "ChatGPT Memory Manager API with User Isolation",
+        "status": "ChatGPT Spark API with User Isolation",
         "environment": os.getenv("RAILWAY_ENVIRONMENT", "local"),
         "openai_configured": client is not None,
         "supabase_configured": supabase is not None,

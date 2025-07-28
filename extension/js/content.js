@@ -1,6 +1,6 @@
 // Enhanced content script with Unified Coach Panel - Subtle UX with non-conflicting shortcuts
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-console.log(`ChatGPT Memory Manager - AI Coach ready! Press ${isMac ? '⌘J' : 'Ctrl+J'} to toggle.`);
+console.log(`ChatGPT Spark - AI Assistant ready! Press ${isMac ? '⌘J' : 'Ctrl+J'} to toggle.`);
 
 // Existing variables
 let unifiedCoachPanel = null;
@@ -69,7 +69,7 @@ function createUnifiedCoachPanel() {
         ">
             <div style="display: flex; align-items: center; gap: 8px;">
                 <div style="width: 8px; height: 8px; background: #10a37f; border-radius: 50%; animation: pulse 2s infinite;"></div>
-                <strong style="color: #2d3748; font-size: 14px;">🤖 AI Coach</strong>
+                <strong style="color: #2d3748; font-size: 14px;">⚡ ChatGPT Spark</strong>
             </div>
             <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
                 <button id="coach-minimize-btn" style="
