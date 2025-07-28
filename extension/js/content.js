@@ -1,5 +1,6 @@
-// Enhanced content script with Unified Coach Panel - Better UX with multiple access points
-console.log('ChatGPT Memory Manager - Unified AI Coach with enhanced accessibility!');
+// Enhanced content script with Unified Coach Panel - Subtle UX with non-conflicting shortcuts
+const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+console.log(`ChatGPT Memory Manager - AI Coach ready! Press ${isMac ? '⌘J' : 'Ctrl+J'} to toggle.`);
 
 // Existing variables
 let unifiedCoachPanel = null;
@@ -55,7 +56,7 @@ function createUnifiedCoachPanel() {
     `;
     
     const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-    const shortcutText = isMac ? '⌘K' : 'Ctrl+K';
+    const shortcutText = isMac ? '⌘J' : 'Ctrl+J';
     
     unifiedCoachPanel.innerHTML = `
         <!-- Header -->
@@ -398,27 +399,48 @@ function togglePanelMinimize() {
 function showFloatingCoachButton() {
     let floatingBtn = document.getElementById('floating-coach-btn');
     const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-    const shortcutText = isMac ? '⌘K' : 'Ctrl+K';
+    const shortcutText = isMac ? '⌘J' : 'Ctrl+J';
     
     if (!floatingBtn) {
         floatingBtn = document.createElement('button');
         floatingBtn.id = 'floating-coach-btn';
         floatingBtn.style.cssText = `
             position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 50px;
-            height: 50px;
-            border-radius: 25px;
+            bottom: 24px;
+            right: 24px;
+            width: 48px;
+            height: 48px;
+            border-radius: 24px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.25);
             cursor: pointer;
             z-index: 9999;
-            font-size: 20px;
-            transition: transform 0.2s;
+            font-size: 18px;
+            transition: all 0.2s ease;
+            opacity: 0;
+            animation: fadeInButton 0.5s ease forwards;
         `;
+        
+        // Add the fade-in animation
+        if (!document.querySelector('#floating-btn-animation')) {
+            const animStyle = document.createElement('style');
+            animStyle.id = 'floating-btn-animation';
+            animStyle.textContent = `
+                @keyframes fadeInButton {
+                    from { 
+                        opacity: 0;
+                        transform: scale(0.8);
+                    }
+                    to { 
+                        opacity: 0.9;
+                        transform: scale(1);
+                    }
+                }
+            `;
+            document.head.appendChild(animStyle);
+        }
         floatingBtn.innerHTML = '🤖';
         floatingBtn.title = `Open AI Coach (${shortcutText})`;
         
@@ -431,79 +453,25 @@ function showFloatingCoachButton() {
             floatingBtn.style.display = 'none';
         });
         
+        floatingBtn.addEventListener('animationend', () => {
+            floatingBtn.style.opacity = '0.9';
+        });
+        
         floatingBtn.addEventListener('mouseenter', () => {
-            floatingBtn.style.transform = 'scale(1.1)';
+            floatingBtn.style.transform = 'scale(1.08)';
+            floatingBtn.style.opacity = '1';
+            floatingBtn.style.boxShadow = '0 6px 16px rgba(102, 126, 234, 0.35)';
         });
         
         floatingBtn.addEventListener('mouseleave', () => {
             floatingBtn.style.transform = 'scale(1)';
+            floatingBtn.style.opacity = '0.9';
+            floatingBtn.style.boxShadow = '0 4px 12px rgba(102, 126, 234, 0.25)';
         });
         
         document.body.appendChild(floatingBtn);
     } else {
         floatingBtn.style.display = 'block';
-    }
-}
-
-// Create persistent sidebar toggle
-function createPersistentToggle() {
-    let toggleBtn = document.getElementById('persistent-coach-toggle');
-    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-    const shortcutText = isMac ? '⌘K' : 'Ctrl+K';
-    
-    if (!toggleBtn) {
-        toggleBtn = document.createElement('button');
-        toggleBtn.id = 'persistent-coach-toggle';
-        toggleBtn.style.cssText = `
-            position: fixed;
-            top: 50%;
-            right: 0;
-            transform: translateY(-50%);
-            width: 30px;
-            height: 80px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border: none;
-            border-radius: 8px 0 0 8px;
-            color: white;
-            cursor: pointer;
-            z-index: 9998;
-            font-size: 16px;
-            writing-mode: vertical-rl;
-            text-orientation: mixed;
-            padding: 8px 4px;
-            box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
-            transition: all 0.3s ease;
-        `;
-        toggleBtn.innerHTML = 'AI';
-        toggleBtn.title = `Toggle AI Coach (${shortcutText})`;
-        
-        toggleBtn.addEventListener('click', () => {
-            if (!unifiedCoachPanel) {
-                createUnifiedCoachPanel();
-            }
-            
-            if (unifiedCoachPanel.style.display === 'none') {
-                unifiedCoachPanel.style.display = 'block';
-                unifiedCoachPanel.setAttribute('data-manually-hidden', 'false');
-                const floatingBtn = document.getElementById('floating-coach-btn');
-                if (floatingBtn) floatingBtn.style.display = 'none';
-            } else {
-                unifiedCoachPanel.style.display = 'none';
-                unifiedCoachPanel.setAttribute('data-manually-hidden', 'true');
-            }
-        });
-        
-        toggleBtn.addEventListener('mouseenter', () => {
-            toggleBtn.style.right = '2px';
-            toggleBtn.style.width = '35px';
-        });
-        
-        toggleBtn.addEventListener('mouseleave', () => {
-            toggleBtn.style.right = '0';
-            toggleBtn.style.width = '30px';
-        });
-        
-        document.body.appendChild(toggleBtn);
     }
 }
 
@@ -1397,11 +1365,11 @@ function setupInputMonitoring() {
         
         // Show a one-time tip about keyboard shortcut
         try {
-            const hasShownTip = localStorage.getItem('ai-coach-tip-shown');
+            const hasShownTip = localStorage.getItem('ai-coach-tip-shown-v2');
             if (!hasShownTip) {
                 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-                showTemporaryNotification(`💡 Tip: Press ${isMac ? '⌘K' : 'Ctrl+K'} anytime to toggle AI Coach`, 'info', 6000);
-                localStorage.setItem('ai-coach-tip-shown', 'true');
+                showTemporaryNotification(`💡 Tip: Press ${isMac ? '⌘J' : 'Ctrl+J'} anytime to toggle AI Coach`, 'info', 6000);
+                localStorage.setItem('ai-coach-tip-shown-v2', 'true');
             }
         } catch (e) {
             // localStorage might not be available in some contexts
@@ -1415,18 +1383,18 @@ function initializePhase2Features() {
     
     startConversationMonitoring();
     
-    // Keyboard shortcut (Cmd+K on Mac, Ctrl+K on Windows)
+    // Keyboard shortcut (Cmd+J on Mac, Ctrl+J on Windows)
     document.addEventListener('keydown', (e) => {
         const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
         const modifier = isMac ? e.metaKey : e.ctrlKey;
         
-        if (modifier && e.key === 'k') {
+        if (modifier && e.key === 'j') {
             e.preventDefault();
             if (unifiedCoachPanel) {
                 if (unifiedCoachPanel.style.display === 'none') {
                     unifiedCoachPanel.style.display = 'block';
                     unifiedCoachPanel.setAttribute('data-manually-hidden', 'false');
-                    // Remove floating button if it exists
+                    // Hide floating button if it exists
                     const floatingBtn = document.getElementById('floating-coach-btn');
                     if (floatingBtn) floatingBtn.style.display = 'none';
                 } else {
@@ -1444,7 +1412,7 @@ function initializePhase2Features() {
     
     const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
     console.log('✅ Phase 2 features initialized!');
-    console.log(`💡 Use ${isMac ? '⌘K' : 'Ctrl+K'} to toggle AI Coach panel`);
+    console.log(`💡 Use ${isMac ? '⌘J' : 'Ctrl+J'} to toggle AI Coach panel`);
 }
 
 // Enhanced initialization
@@ -1452,13 +1420,10 @@ function initializeEnhanced() {
     setupInputMonitoring();
     setInterval(setupInputMonitoring, 3000);
     
-    // Create persistent toggle button
-    createPersistentToggle();
-    
-    // Always show floating button on load
+    // Show floating button after a delay (more subtle)
     setTimeout(() => {
         showFloatingCoachButton();
-    }, 1000);
+    }, 2000);
     
     setTimeout(() => {
         initializePhase2Features();
@@ -1466,7 +1431,7 @@ function initializeEnhanced() {
     
     const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
     console.log('🤖 Unified AI Coach with all features ready!');
-    console.log(`💡 Press ${isMac ? '⌘K' : 'Ctrl+K'} to toggle AI Coach`);
+    console.log(`💡 Press ${isMac ? '⌘J' : 'Ctrl+J'} to toggle AI Coach`);
 }
 
 // Initialize everything
