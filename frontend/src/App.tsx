@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Search, Brain, Calendar, RefreshCw, MessageCircle, Download, BarChart, Trash2, X } from 'lucide-react';
+import { Search, Brain, Calendar, RefreshCw, MessageCircle, Download, BarChart, Trash2, X, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import './App.css';
 
@@ -23,6 +23,7 @@ interface SearchResult {
     topics?: string;
   };
   distance?: number;
+  relevance?: number;
 }
 
 interface Stats {
@@ -41,20 +42,60 @@ function App() {
   const [showStats, setShowStats] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
+  // Get or generate user ID
   useEffect(() => {
-    loadMemories();
+    const params = new URLSearchParams(window.location.search);
+    let uid = params.get('userId');
+    
+    if (!uid) {
+      // Try to get from localStorage
+      uid = localStorage.getItem('userId');
+      if (!uid) {
+        // Generate new one
+        uid = 'user_' + crypto.randomUUID();
+        localStorage.setItem('userId', uid);
+      }
+      // Redirect with userId in URL
+      window.location.href = `${window.location.pathname}?userId=${uid}`;
+    } else {
+      // Save to localStorage for persistence
+      localStorage.setItem('userId', uid);
+      setUserId(uid);
+    }
   }, []);
 
+  useEffect(() => {
+    if (userId) {
+      loadMemories();
+    }
+  }, [userId]);
+
+  const getHeaders = () => ({
+    'X-User-ID': userId || ''
+  });
+
   const loadMemories = async () => {
+    if (!userId) return;
+    
     try {
       setLoading(true);
-      const response = await axios.get(`${API_URL}/get_all_memories`);
+      setError(null);
+      const response = await axios.get(`${API_URL}/get_all_memories`, {
+        headers: getHeaders()
+      });
       setMemories(response.data.memories);
       setTotalMemories(response.data.total);
       calculateStats(response.data.memories);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error loading memories:', error);
+      if (error.response?.status === 429) {
+        setError('Daily limit reached. Please try again tomorrow.');
+      } else {
+        setError('Failed to load memories. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -89,38 +130,52 @@ function App() {
   };
 
   const searchMemories = async () => {
-    if (!searchQuery.trim()) {
+    if (!searchQuery.trim() || !userId) {
       setSearchResults([]);
       return;
     }
 
     try {
       setLoading(true);
+      setError(null);
       const response = await axios.post(`${API_URL}/search_memory`, {
         query: searchQuery,
         limit: 10
+      }, {
+        headers: getHeaders()
       });
       setSearchResults(response.data.memories);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error searching memories:', error);
+      if (error.response?.status === 429) {
+        setError('Daily limit reached. Please try again tomorrow.');
+      } else {
+        setError('Search failed. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const deleteMemory = async (memoryId: string) => {
+    if (!userId) return;
+    
     try {
-      await axios.delete(`${API_URL}/delete_memory/${memoryId}`);
+      await axios.delete(`${API_URL}/delete_memory/${memoryId}`, {
+        headers: getHeaders()
+      });
       setDeleteConfirm(null);
       loadMemories();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting memory:', error);
+      setError('Failed to delete memory. Please try again.');
     }
   };
 
   const exportMemories = () => {
     const exportData = {
       exportDate: new Date().toISOString(),
+      userId: userId,
       totalMemories: memories.length,
       memories: memories.map(m => ({
         ...m,
@@ -137,8 +192,23 @@ function App() {
     link.click();
   };
 
+  const getRelevanceColor = (relevance?: number) => {
+    if (!relevance) return '#666';
+    if (relevance > 0.8) return '#10a37f';
+    if (relevance > 0.6) return '#ffa500';
     return '#666';
   };
+
+  if (!userId) {
+    return (
+      <div className="App">
+        <div style={{ padding: '40px', textAlign: 'center' }}>
+          <Brain size={48} />
+          <h2>Loading your memory space...</h2>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="App">
@@ -147,6 +217,9 @@ function App() {
           <div className="title-section">
             <Brain size={32} className="logo" />
             <h1>ChatGPT Memory Manager</h1>
+            <span style={{ fontSize: '12px', opacity: 0.7, marginLeft: '10px' }}>
+              Your Private Memory Space
+            </span>
           </div>
           <div className="header-actions">
             <button onClick={() => setShowStats(!showStats)} className="stats-button">
@@ -165,10 +238,32 @@ function App() {
         </div>
       </header>
 
+      {error && (
+        <div style={{
+          background: '#ff6b6b',
+          color: 'white',
+          padding: '10px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px'
+        }}>
+          <AlertCircle size={20} />
+          {error}
+          <button onClick={() => setError(null)} style={{
+            marginLeft: 'auto',
+            background: 'none',
+            border: 'none',
+            color: 'white',
+            cursor: 'pointer',
+            fontSize: '16px'
+          }}>×</button>
+        </div>
+      )}
+
       <main className="main-content">
         {showStats && stats && (
           <div className="stats-panel">
-            <h3>Memory Statistics</h3>
+            <h3>Your Memory Statistics</h3>
             <div className="stats-grid">
               <div className="stat-item">
                 <span className="stat-label">Total Conversations</span>
@@ -251,6 +346,15 @@ function App() {
                       ))}
                     </div>
                   )}
+                  {result.relevance && (
+                    <div style={{
+                      fontSize: '11px',
+                      color: getRelevanceColor(result.relevance),
+                      marginTop: '8px'
+                    }}>
+                      Relevance: {Math.round(result.relevance * 100)}%
+                    </div>
+                  )}
                   <div className="memory-meta">
                     <Calendar size={14} />
                     <span>{format(new Date(result.metadata.timestamp), 'MMM d, yyyy')}</span>
@@ -263,7 +367,7 @@ function App() {
 
         <div className="section">
           <div className="section-header">
-            <h2>Recent Memories</h2>
+            <h2>Your Recent Memories</h2>
             <button onClick={loadMemories} className="refresh-button" disabled={loading}>
               <RefreshCw size={16} className={loading ? 'spinning' : ''} />
               Refresh
@@ -276,6 +380,9 @@ function App() {
             <div className="empty-state">
               <Brain size={48} />
               <p>No memories yet. Start capturing your ChatGPT conversations!</p>
+              <p style={{ fontSize: '14px', opacity: 0.7, marginTop: '10px' }}>
+                Click the extension icon on ChatGPT to save conversations
+              </p>
             </div>
           ) : (
             <div className="memory-grid">
@@ -318,6 +425,16 @@ function App() {
               ))}
             </div>
           )}
+        </div>
+
+        <div style={{
+          textAlign: 'center',
+          padding: '40px 20px',
+          opacity: 0.6,
+          fontSize: '12px'
+        }}>
+          <p>Your User ID: {userId}</p>
+          <p>All memories are private to your browser installation</p>
         </div>
       </main>
     </div>
