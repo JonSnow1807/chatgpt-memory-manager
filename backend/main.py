@@ -3,8 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
-import chromadb
-from chromadb.utils import embedding_functions
 import openai
 from dotenv import load_dotenv
 import os
@@ -14,6 +12,8 @@ import uuid
 import logging
 import re
 import statistics
+from supabase import create_client, Client
+import numpy as np
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +27,20 @@ app = FastAPI()
 
 # Rate limiting storage (in-memory for now)
 user_rate_limits = {}
+
+# Initialize Supabase
+try:
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
+    
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise ValueError("Supabase credentials not found in environment variables")
+    
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    logger.info("Supabase client initialized successfully")
+except Exception as e:
+    logger.error(f"Supabase initialization error: {e}")
+    supabase = None
 
 # CORS middleware
 @app.middleware("http")
@@ -95,34 +109,10 @@ try:
         raise ValueError("OpenAI API key not found")
     
     client = openai.OpenAI(api_key=api_key)
-    
-    openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-        api_key=api_key,
-        model_name="text-embedding-3-small"
-    )
-    logger.info("OpenAI client and embeddings initialized successfully")
+    logger.info("OpenAI client initialized successfully")
 except Exception as e:
     logger.error(f"OpenAI initialization error: {e}")
-    openai_ef = embedding_functions.DefaultEmbeddingFunction()
     client = None
-
-# Initialize ChromaDB
-try:
-    if os.getenv("RAILWAY_ENVIRONMENT"):
-        logger.info("Running on Railway - using ephemeral ChromaDB")
-        chroma_client = chromadb.EphemeralClient()
-    else:
-        logger.info("Running locally - using persistent ChromaDB")
-        chroma_client = chromadb.PersistentClient(path="./memory_db")
-    
-    collection = chroma_client.get_or_create_collection(
-        name="chatgpt_memories",
-        embedding_function=openai_ef
-    )
-    logger.info("ChromaDB collection created with OpenAI embeddings")
-except Exception as e:
-    logger.error(f"ChromaDB initialization error: {e}")
-    raise
 
 # Utility function for smart text truncation
 def smart_truncate(text, max_length=350):
@@ -163,7 +153,7 @@ def smart_truncate(text, max_length=350):
     # Last resort: just cut at max length with ellipsis
     return text[:max_length].rstrip() + "..."
 
-# Phase 2: Conversation analysis functions
+# Phase 2: Conversation analysis functions (keeping all existing ones)
 def extract_topics_from_text(text: str) -> List[str]:
     """Extract main topics from a text using keyword analysis"""
     programming_keywords = ["code", "function", "variable", "class", "method", "python", "javascript", "bug", "error", "api", "database", "algorithm"]
@@ -410,17 +400,17 @@ async def root():
         "status": "ChatGPT Memory Manager API with User Isolation",
         "environment": os.getenv("RAILWAY_ENVIRONMENT", "local"),
         "openai_configured": client is not None,
-        "chromadb_configured": True,
-        "embedding_model": "text-embedding-3-small" if client else "default",
-        "features": ["user_isolation", "rate_limiting", "conversation_analysis"],
-        "version": "1.1.0"
+        "supabase_configured": supabase is not None,
+        "storage_backend": "supabase" if supabase else "none",
+        "features": ["user_isolation", "rate_limiting", "conversation_analysis", "permanent_storage"],
+        "version": "2.0.0"
     }
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy"}
+    return {"status": "healthy", "storage": "supabase" if supabase else "none"}
 
-# USER-ISOLATED ENDPOINTS
+# USER-ISOLATED ENDPOINTS WITH SUPABASE
 
 @app.post("/save_conversation")
 async def save_conversation(conversation: Conversation, request: Request):
@@ -428,6 +418,9 @@ async def save_conversation(conversation: Conversation, request: Request):
     user_id = request.headers.get("X-User-ID")
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID required")
+    
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Storage backend not configured")
     
     try:
         conversation_text = "\n".join([
@@ -437,6 +430,7 @@ async def save_conversation(conversation: Conversation, request: Request):
         
         summary = ""
         key_topics = []
+        embedding = None
         
         if client:
             try:
@@ -463,6 +457,14 @@ async def save_conversation(conversation: Conversation, request: Request):
                     key_topics = [t.strip() for t in topics_str.split(",")]
                 else:
                     summary = full_response
+                
+                # Generate embedding for semantic search
+                embedding_text = f"{summary}\n{conversation_text[:1000]}"
+                embedding_response = client.embeddings.create(
+                    model="text-embedding-3-small",
+                    input=embedding_text
+                )
+                embedding = embedding_response.data[0].embedding
                     
             except Exception as e:
                 logger.error(f"OpenAI API error: {e}")
@@ -472,32 +474,31 @@ async def save_conversation(conversation: Conversation, request: Request):
             first_msg = conversation.messages[0].content[:100] if conversation.messages else "Empty conversation"
             summary = f"Conversation starting with: {first_msg}..."
         
-        enhanced_document = f"{summary}\n\nTopics: {', '.join(key_topics)}\n\nFull conversation:\n{conversation_text}"
-        
-        doc_id = str(uuid.uuid4())
-        
-        metadata = {
-            "user_id": user_id,  # USER ISOLATION
+        # Prepare data for Supabase
+        memory_data = {
+            "user_id": user_id,
+            "content": conversation_text,
             "summary": summary,
-            "timestamp": datetime.now().isoformat(),
-            "message_count": len(conversation.messages),
-            "url": conversation.url,
             "title": conversation.title or "Untitled Conversation",
-            "topics": json.dumps(key_topics),
-            "first_message": conversation.messages[0].content[:200] if conversation.messages else ""
+            "topics": key_topics,
+            "url": conversation.url,
+            "message_count": len(conversation.messages),
+            "embedding": embedding
         }
         
-        collection.add(
-            documents=[enhanced_document],
-            metadatas=[metadata],
-            ids=[doc_id]
-        )
+        # Save to Supabase
+        result = supabase.table("memories").insert(memory_data).execute()
         
-        logger.info(f"Saved conversation {doc_id} for user {user_id} with topics: {key_topics}")
+        if not result.data:
+            raise HTTPException(status_code=500, detail="Failed to save memory")
+        
+        saved_memory = result.data[0]
+        
+        logger.info(f"Saved conversation {saved_memory['id']} for user {user_id} with topics: {key_topics}")
         
         return {
             "status": "success",
-            "id": doc_id,
+            "id": saved_memory['id'],
             "user_id": user_id,
             "summary": summary,
             "message_count": len(conversation.messages),
@@ -514,37 +515,77 @@ async def search_memory(query: SearchQuery, request: Request):
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID required")
     
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Storage backend not configured")
+    
     try:
         logger.info(f"User {user_id} searching for: {query.query}")
         
-        # Search only within user's memories
-        results = collection.query(
-            query_texts=[query.query],
-            n_results=min(query.limit, 20),
-            where={"user_id": user_id},  # USER FILTER
-            include=["documents", "metadatas", "distances"]
-        )
-        
         memories = []
-        if results and results.get('documents') and results['documents'][0]:
-            docs = results['documents'][0]
-            metas = results['metadatas'][0] if results.get('metadatas') else []
-            distances = results['distances'][0] if results.get('distances') else []
-            
-            for i in range(len(docs)):
-                distance = distances[i] if i < len(distances) else 1.0
-                relevance = max(0, min(1, 1 - (distance / 2)))
+        
+        # Try vector search first if OpenAI is available
+        if client:
+            try:
+                # Generate embedding for search query
+                embedding_response = client.embeddings.create(
+                    model="text-embedding-3-small",
+                    input=query.query
+                )
+                query_embedding = embedding_response.data[0].embedding
                 
-                if relevance > 0.3:
-                    memories.append({
-                        "content": docs[i][:300] + "..." if len(docs[i]) > 300 else docs[i],
-                        "metadata": metas[i] if i < len(metas) else {},
-                        "relevance": round(relevance, 2),
-                        "distance": distance
-                    })
+                # Perform vector similarity search in Supabase
+                results = supabase.rpc(
+                    'search_memories',
+                    {
+                        'query_embedding': query_embedding,
+                        'match_threshold': 0.5,  # Lower threshold for better results
+                        'match_count': query.limit,
+                        'filter_user_id': user_id
+                    }
+                ).execute()
+                
+                if results.data:
+                    for row in results.data:
+                        memories.append({
+                            "content": row['content'][:300] + "..." if len(row['content']) > 300 else row['content'],
+                            "metadata": {
+                                "summary": row['summary'],
+                                "timestamp": row['created_at'],
+                                "title": row['title'],
+                                "topics": json.dumps(row['topics']) if row['topics'] else "[]"
+                            },
+                            "relevance": round(row['distance'], 2),
+                            "distance": row['distance']
+                        })
+                else:
+                    logger.info("No results from vector search, falling back to text search")
+            except Exception as e:
+                logger.warning(f"Vector search failed, falling back to text search: {e}")
+        
+        # If vector search didn't work or no results, try text search
+        if not memories:
+            results = supabase.rpc(
+                'text_search_memories',
+                {
+                    'search_query': query.query,
+                    'match_count': query.limit,
+                    'filter_user_id': user_id
+                }
+            ).execute()
             
-            memories.sort(key=lambda x: x['relevance'], reverse=True)
-            memories = memories[:query.limit]
+            if results.data:
+                for row in results.data:
+                    memories.append({
+                        "content": row['content'][:300] + "..." if len(row['content']) > 300 else row['content'],
+                        "metadata": {
+                            "summary": row['summary'],
+                            "timestamp": row['created_at'],
+                            "title": row['title'],
+                            "topics": json.dumps(row['topics']) if row['topics'] else "[]"
+                        },
+                        "relevance": 0.7,  # Default relevance for text search
+                        "distance": 0.3
+                    })
         
         logger.info(f"Found {len(memories)} relevant results for user {user_id}")
         return {"memories": memories}
@@ -559,35 +600,25 @@ async def get_all_memories(request: Request):
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID required")
     
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Storage backend not configured")
+    
     try:
-        # Get only this user's memories
-        all_data = collection.get(
-            where={"user_id": user_id}  # USER FILTER
-        )
+        # Get all memories for this user
+        results = supabase.table("memories").select("*").eq(
+            "user_id", user_id
+        ).order("created_at", desc=True).execute()
         
         memories = []
-        if all_data and all_data.get('ids'):
-            for i in range(len(all_data['ids'])):
-                memory_data = {
-                    "id": all_data['ids'][i],
-                    "summary": "",
-                    "timestamp": "",
-                    "title": "Untitled",
-                    "topics": []
-                }
-                
-                if all_data.get('metadatas') and i < len(all_data['metadatas']):
-                    metadata = all_data['metadatas'][i]
-                    memory_data.update({
-                        "summary": metadata.get('summary', ''),
-                        "timestamp": metadata.get('timestamp', ''),
-                        "title": metadata.get('title', 'Untitled'),
-                        "topics": json.loads(metadata.get('topics', '[]'))
-                    })
-                
-                memories.append(memory_data)
-        
-        memories.sort(key=lambda x: x['timestamp'], reverse=True)
+        if results.data:
+            for row in results.data:
+                memories.append({
+                    "id": row['id'],
+                    "summary": row['summary'],
+                    "timestamp": row['created_at'],
+                    "title": row['title'],
+                    "topics": row['topics'] if row['topics'] else []
+                })
         
         logger.info(f"Retrieved {len(memories)} memories for user {user_id}")
         return {"memories": memories, "total": len(memories), "user_id": user_id}
@@ -602,16 +633,21 @@ async def delete_memory(memory_id: str, request: Request):
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID required")
     
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Storage backend not configured")
+    
     try:
         # Verify the memory belongs to this user
-        existing = collection.get(ids=[memory_id])
-        if not existing or not existing.get('ids'):
+        existing = supabase.table("memories").select("id").eq(
+            "id", memory_id
+        ).eq("user_id", user_id).execute()
+        
+        if not existing.data:
             raise HTTPException(status_code=404, detail="Memory not found")
         
-        if existing['metadatas'][0].get('user_id') != user_id:
-            raise HTTPException(status_code=403, detail="Unauthorized")
+        # Delete the memory
+        supabase.table("memories").delete().eq("id", memory_id).execute()
         
-        collection.delete(ids=[memory_id])
         logger.info(f"Deleted memory {memory_id} for user {user_id}")
         return {"status": "success", "deleted_id": memory_id}
     except Exception as e:
@@ -624,23 +660,27 @@ async def update_memory(memory_id: str, update: MemoryUpdate, request: Request):
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID required")
     
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Storage backend not configured")
+    
     try:
-        existing = collection.get(ids=[memory_id])
+        # Verify the memory belongs to this user
+        existing = supabase.table("memories").select("*").eq(
+            "id", memory_id
+        ).eq("user_id", user_id).execute()
         
-        if not existing or not existing.get('ids'):
+        if not existing.data:
             raise HTTPException(status_code=404, detail="Memory not found")
         
-        if existing['metadatas'][0].get('user_id') != user_id:
-            raise HTTPException(status_code=403, detail="Unauthorized")
+        # Update the memory
+        update_data = {
+            "summary": update.summary,
+            "title": update.title
+        }
         
-        metadata = existing['metadatas'][0]
-        metadata['summary'] = update.summary
-        metadata['title'] = update.title
-        
-        collection.update(
-            ids=[memory_id],
-            metadatas=[metadata]
-        )
+        result = supabase.table("memories").update(update_data).eq(
+            "id", memory_id
+        ).execute()
         
         logger.info(f"Updated memory {memory_id} for user {user_id}")
         return {"status": "success", "updated_id": memory_id}
@@ -649,6 +689,7 @@ async def update_memory(memory_id: str, update: MemoryUpdate, request: Request):
         logger.error(f"Error updating memory: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# Keep all existing AI analysis endpoints unchanged
 @app.post("/analyze_prompt")
 async def analyze_prompt(request: PromptAnalysisRequest):
     if not client:
@@ -828,8 +869,7 @@ Return ONLY the improved prompt text, no explanations or meta-commentary."""
             "error": "AI improvement temporarily unavailable"
         }
 
-# NEW Phase 2: Conversation Flow Analysis Endpoints
-
+# Keep all existing Phase 2 endpoints unchanged
 @app.post("/analyze_conversation_turn")
 async def analyze_conversation_turn(request: ConversationAnalysisRequest):
     """Analyze a single conversation turn for quality and flow"""
