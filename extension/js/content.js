@@ -743,25 +743,55 @@ function updateAnalyticsTabContent() {
 // ===== EXISTING FUNCTIONS (Keep all unchanged) =====
 
 // Function to extract conversation
+// Function to extract conversation
 function extractConversation() {
     const messages = [];
     const messageElements = document.querySelectorAll('[data-message-author-role]');
     
-    messageElements.forEach(element => {
+    console.log(`Found ${messageElements.length} message elements`);
+    
+    messageElements.forEach((element, index) => {
         const role = element.getAttribute('data-message-author-role');
-        const textElement = element.querySelector('.markdown');
+        
+        // Try multiple selectors to find the text content
+        let textElement = element.querySelector('.markdown');
+        if (!textElement) {
+            textElement = element.querySelector('.prose');
+        }
+        if (!textElement) {
+            textElement = element.querySelector('[class*="prose"]');
+        }
+        if (!textElement) {
+            // Last resort - get all text from the element
+            const textNodes = element.querySelectorAll('.text-base');
+            if (textNodes.length > 0) {
+                textElement = textNodes[0];
+            }
+        }
+        
+        let content = '';
         if (textElement) {
+            content = textElement.innerText || textElement.textContent || '';
+        } else {
+            // Fallback - get text directly from element
+            content = element.innerText || element.textContent || '';
+        }
+        
+        if (role && content.trim()) {
             messages.push({
                 role: role,
-                content: textElement.innerText,
+                content: content.trim(),
                 timestamp: new Date().toISOString()
             });
+            console.log(`Message ${index}: ${role} - ${content.substring(0, 50)}...`);
         }
     });
     
+    console.log(`Extracted ${messages.length} messages total`);
     return messages;
 }
 
+// Enhanced conversation extraction with turn tracking
 // Enhanced conversation extraction with turn tracking
 function extractConversationWithTurns() {
     const messages = [];
@@ -769,18 +799,27 @@ function extractConversationWithTurns() {
     
     messageElements.forEach((element, index) => {
         const role = element.getAttribute('data-message-author-role');
-        const textElement = element.querySelector('.markdown') || element.querySelector('[class*="markdown"]') || element;
         
-        if (textElement) {
-            const content = textElement.innerText || textElement.textContent || '';
-            if (content.trim()) {
-                messages.push({
-                    role: role,
-                    content: content.trim(),
-                    timestamp: new Date().toISOString(),
-                    elementIndex: index
-                });
-            }
+        // Try multiple selectors to find the text content
+        let textElement = element.querySelector('.markdown') || 
+                         element.querySelector('.prose') || 
+                         element.querySelector('[class*="prose"]') ||
+                         element.querySelector('.text-base');
+        
+        if (!textElement) {
+            // If no specific text element found, use the whole element
+            textElement = element;
+        }
+        
+        const content = textElement.innerText || textElement.textContent || '';
+        
+        if (content.trim()) {
+            messages.push({
+                role: role,
+                content: content.trim(),
+                timestamp: new Date().toISOString(),
+                elementIndex: index
+            });
         }
     });
     
@@ -1439,8 +1478,14 @@ setTimeout(initializeEnhanced, 2000);
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    console.log('Content script received message:', request.action);
+    
     if (request.action === 'capture') {
         const conversation = extractConversation();
+        console.log('Sending back conversation:', conversation.length, 'messages');
         sendResponse({ conversation: conversation });
     }
+    
+    // Return true to indicate async response
+    return true;
 });
