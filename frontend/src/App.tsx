@@ -44,34 +44,42 @@ function App() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
 
-  // Get or generate user ID
+  // Get or generate user ID - THIS MUST RUN FIRST
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    let uid = params.get('userId');
-    
-    if (!uid) {
-      // Try to get from localStorage
-      uid = localStorage.getItem('userId');
+    const initializeUserId = () => {
+      const params = new URLSearchParams(window.location.search);
+      let uid = params.get('userId');
+      
       if (!uid) {
-        // Generate new one
-        uid = 'user_' + crypto.randomUUID();
+        // Try to get from localStorage
+        uid = localStorage.getItem('userId');
+        if (!uid) {
+          // Generate new one
+          uid = 'user_' + crypto.randomUUID();
+          localStorage.setItem('userId', uid);
+        }
+        // Redirect with userId in URL
+        window.location.href = `${window.location.pathname}?userId=${uid}`;
+        return; // Stop execution here
+      } else {
+        // Save to localStorage for persistence
         localStorage.setItem('userId', uid);
+        setUserId(uid);
+        setIsInitializing(false);
       }
-      // Redirect with userId in URL
-      window.location.href = `${window.location.pathname}?userId=${uid}`;
-    } else {
-      // Save to localStorage for persistence
-      localStorage.setItem('userId', uid);
-      setUserId(uid);
-    }
-  }, []);
+    };
 
+    initializeUserId();
+  }, []); // Empty dependency array - runs once
+
+  // Load memories ONLY after userId is set
   useEffect(() => {
-    if (userId) {
+    if (userId && !isInitializing) {
       loadMemories();
     }
-  }, [userId]);
+  }, [userId, isInitializing]);
 
   const getHeaders = () => ({
     'X-User-ID': userId || ''
@@ -93,6 +101,10 @@ function App() {
       console.error('Error loading memories:', error);
       if (error.response?.status === 429) {
         setError('Daily limit reached. Please try again tomorrow.');
+      } else if (error.response?.status === 400) {
+        setError('User authentication required. Refreshing...');
+        // Force refresh to get userId
+        setTimeout(() => window.location.reload(), 1000);
       } else {
         setError('Failed to load memories. Please try again.');
       }
@@ -199,7 +211,8 @@ function App() {
     return '#666';
   };
 
-  if (!userId) {
+  // Show loading state while initializing
+  if (isInitializing || !userId) {
     return (
       <div className="App">
         <div style={{ padding: '40px', textAlign: 'center' }}>
@@ -441,4 +454,4 @@ function App() {
   );
 }
 
-export default App;// Force redeploy Sun Jul 27 21:29:51 EDT 2025
+export default App;
