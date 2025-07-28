@@ -231,7 +231,7 @@ function App() {
         <div className="header-content">
           <div className="title-section">
             <Brain size={32} className="logo" />
-            <h1>ChatGPT Memory Manager v2.0</h1>
+            <h1>ChatGPT Memory Manager</h1>
             <span style={{ fontSize: '12px', opacity: 0.7, marginLeft: '10px' }}>
               Your Private Memory Space
             </span>
