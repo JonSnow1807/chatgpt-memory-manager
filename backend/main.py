@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -25,6 +25,9 @@ load_dotenv()
 # Initialize FastAPI
 app = FastAPI()
 
+# Rate limiting storage (in-memory for now)
+user_rate_limits = {}
+
 # CORS middleware
 @app.middleware("http")
 async def cors_handler(request, call_next):
@@ -33,6 +36,37 @@ async def cors_handler(request, call_next):
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "*"
     response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
+
+# Rate limiting middleware
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    # Skip rate limiting for health checks
+    if request.url.path in ["/", "/health"]:
+        return await call_next(request)
+    
+    # Get user ID from header
+    user_id = request.headers.get("X-User-ID", "anonymous")
+    
+    # Simple rate limiting: 200 requests per day per user
+    today = datetime.now().date().isoformat()
+    key = f"{user_id}:{today}"
+    
+    if key in user_rate_limits:
+        if user_rate_limits[key] >= 200:
+            return JSONResponse(
+                status_code=429,
+                content={"error": "Daily limit reached. Please try again tomorrow."}
+            )
+        user_rate_limits[key] += 1
+    else:
+        user_rate_limits[key] = 1
+    
+    # Clean old entries (simple cleanup)
+    if len(user_rate_limits) > 1000:
+        user_rate_limits.clear()
+    
+    response = await call_next(request)
     return response
 
 @app.options("/{path:path}")
@@ -373,17 +407,247 @@ class ConversationQualityRequest(BaseModel):
 @app.get("/")
 async def root():
     return {
-        "status": "ChatGPT Memory Manager API with Phase 2 Conversation Flow Optimization",
+        "status": "ChatGPT Memory Manager API with User Isolation",
         "environment": os.getenv("RAILWAY_ENVIRONMENT", "local"),
         "openai_configured": client is not None,
         "chromadb_configured": True,
         "embedding_model": "text-embedding-3-small" if client else "default",
-        "phase2_features": ["conversation_turn_analysis", "follow_up_suggestions", "flow_optimization"]
+        "features": ["user_isolation", "rate_limiting", "conversation_analysis"],
+        "version": "1.1.0"
     }
 
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+# USER-ISOLATED ENDPOINTS
+
+@app.post("/save_conversation")
+async def save_conversation(conversation: Conversation, request: Request):
+    # Get user ID from header
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID required")
+    
+    try:
+        conversation_text = "\n".join([
+            f"{msg.role}: {msg.content}" 
+            for msg in conversation.messages
+        ])
+        
+        summary = ""
+        key_topics = []
+        
+        if client:
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": """Extract:
+                        1. A concise summary of the key information
+                        2. Main topics discussed (comma-separated)
+                        Format: 
+                        Summary: [your summary]
+                        Topics: [topic1, topic2, topic3]"""},
+                        {"role": "user", "content": conversation_text}
+                    ],
+                    max_tokens=300
+                )
+                
+                full_response = response.choices[0].message.content
+                
+                if "Summary:" in full_response and "Topics:" in full_response:
+                    parts = full_response.split("Topics:")
+                    summary = parts[0].replace("Summary:", "").strip()
+                    topics_str = parts[1].strip()
+                    key_topics = [t.strip() for t in topics_str.split(",")]
+                else:
+                    summary = full_response
+                    
+            except Exception as e:
+                logger.error(f"OpenAI API error: {e}")
+                summary = f"Error generating summary: {str(e)}"
+        
+        if not summary:
+            first_msg = conversation.messages[0].content[:100] if conversation.messages else "Empty conversation"
+            summary = f"Conversation starting with: {first_msg}..."
+        
+        enhanced_document = f"{summary}\n\nTopics: {', '.join(key_topics)}\n\nFull conversation:\n{conversation_text}"
+        
+        doc_id = str(uuid.uuid4())
+        
+        metadata = {
+            "user_id": user_id,  # USER ISOLATION
+            "summary": summary,
+            "timestamp": datetime.now().isoformat(),
+            "message_count": len(conversation.messages),
+            "url": conversation.url,
+            "title": conversation.title or "Untitled Conversation",
+            "topics": json.dumps(key_topics),
+            "first_message": conversation.messages[0].content[:200] if conversation.messages else ""
+        }
+        
+        collection.add(
+            documents=[enhanced_document],
+            metadatas=[metadata],
+            ids=[doc_id]
+        )
+        
+        logger.info(f"Saved conversation {doc_id} for user {user_id} with topics: {key_topics}")
+        
+        return {
+            "status": "success",
+            "id": doc_id,
+            "user_id": user_id,
+            "summary": summary,
+            "message_count": len(conversation.messages),
+            "topics": key_topics
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in save_conversation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/search_memory")
+async def search_memory(query: SearchQuery, request: Request):
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID required")
+    
+    try:
+        logger.info(f"User {user_id} searching for: {query.query}")
+        
+        # Search only within user's memories
+        results = collection.query(
+            query_texts=[query.query],
+            n_results=min(query.limit, 20),
+            where={"user_id": user_id},  # USER FILTER
+            include=["documents", "metadatas", "distances"]
+        )
+        
+        memories = []
+        if results and results.get('documents') and results['documents'][0]:
+            docs = results['documents'][0]
+            metas = results['metadatas'][0] if results.get('metadatas') else []
+            distances = results['distances'][0] if results.get('distances') else []
+            
+            for i in range(len(docs)):
+                distance = distances[i] if i < len(distances) else 1.0
+                relevance = max(0, min(1, 1 - (distance / 2)))
+                
+                if relevance > 0.3:
+                    memories.append({
+                        "content": docs[i][:300] + "..." if len(docs[i]) > 300 else docs[i],
+                        "metadata": metas[i] if i < len(metas) else {},
+                        "relevance": round(relevance, 2),
+                        "distance": distance
+                    })
+            
+            memories.sort(key=lambda x: x['relevance'], reverse=True)
+            memories = memories[:query.limit]
+        
+        logger.info(f"Found {len(memories)} relevant results for user {user_id}")
+        return {"memories": memories}
+        
+    except Exception as e:
+        logger.error(f"Error in search_memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/get_all_memories")
+async def get_all_memories(request: Request):
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID required")
+    
+    try:
+        # Get only this user's memories
+        all_data = collection.get(
+            where={"user_id": user_id}  # USER FILTER
+        )
+        
+        memories = []
+        if all_data and all_data.get('ids'):
+            for i in range(len(all_data['ids'])):
+                memory_data = {
+                    "id": all_data['ids'][i],
+                    "summary": "",
+                    "timestamp": "",
+                    "title": "Untitled",
+                    "topics": []
+                }
+                
+                if all_data.get('metadatas') and i < len(all_data['metadatas']):
+                    metadata = all_data['metadatas'][i]
+                    memory_data.update({
+                        "summary": metadata.get('summary', ''),
+                        "timestamp": metadata.get('timestamp', ''),
+                        "title": metadata.get('title', 'Untitled'),
+                        "topics": json.loads(metadata.get('topics', '[]'))
+                    })
+                
+                memories.append(memory_data)
+        
+        memories.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        logger.info(f"Retrieved {len(memories)} memories for user {user_id}")
+        return {"memories": memories, "total": len(memories), "user_id": user_id}
+        
+    except Exception as e:
+        logger.error(f"Error in get_all_memories: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/delete_memory/{memory_id}")
+async def delete_memory(memory_id: str, request: Request):
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID required")
+    
+    try:
+        # Verify the memory belongs to this user
+        existing = collection.get(ids=[memory_id])
+        if not existing or not existing.get('ids'):
+            raise HTTPException(status_code=404, detail="Memory not found")
+        
+        if existing['metadatas'][0].get('user_id') != user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+        
+        collection.delete(ids=[memory_id])
+        logger.info(f"Deleted memory {memory_id} for user {user_id}")
+        return {"status": "success", "deleted_id": memory_id}
+    except Exception as e:
+        logger.error(f"Error deleting memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/update_memory/{memory_id}")
+async def update_memory(memory_id: str, update: MemoryUpdate, request: Request):
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID required")
+    
+    try:
+        existing = collection.get(ids=[memory_id])
+        
+        if not existing or not existing.get('ids'):
+            raise HTTPException(status_code=404, detail="Memory not found")
+        
+        if existing['metadatas'][0].get('user_id') != user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+        
+        metadata = existing['metadatas'][0]
+        metadata['summary'] = update.summary
+        metadata['title'] = update.title
+        
+        collection.update(
+            ids=[memory_id],
+            metadatas=[metadata]
+        )
+        
+        logger.info(f"Updated memory {memory_id} for user {user_id}")
+        return {"status": "success", "updated_id": memory_id}
+        
+    except Exception as e:
+        logger.error(f"Error updating memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/analyze_prompt")
 async def analyze_prompt(request: PromptAnalysisRequest):
@@ -808,194 +1072,6 @@ async def analyze_conversation_quality(request: ConversationQualityRequest):
             "analysis": "Analysis temporarily unavailable",
             "suggestions": ["Continue your conversation naturally"]
         }
-
-# Existing endpoints (unchanged)
-@app.post("/save_conversation")
-async def save_conversation(conversation: Conversation):
-    try:
-        conversation_text = "\n".join([
-            f"{msg.role}: {msg.content}" 
-            for msg in conversation.messages
-        ])
-        
-        summary = ""
-        key_topics = []
-        
-        if client:
-            try:
-                response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": """Extract:
-                        1. A concise summary of the key information
-                        2. Main topics discussed (comma-separated)
-                        Format: 
-                        Summary: [your summary]
-                        Topics: [topic1, topic2, topic3]"""},
-                        {"role": "user", "content": conversation_text}
-                    ],
-                    max_tokens=300
-                )
-                
-                full_response = response.choices[0].message.content
-                
-                if "Summary:" in full_response and "Topics:" in full_response:
-                    parts = full_response.split("Topics:")
-                    summary = parts[0].replace("Summary:", "").strip()
-                    topics_str = parts[1].strip()
-                    key_topics = [t.strip() for t in topics_str.split(",")]
-                else:
-                    summary = full_response
-                    
-            except Exception as e:
-                logger.error(f"OpenAI API error: {e}")
-                summary = f"Error generating summary: {str(e)}"
-        
-        if not summary:
-            first_msg = conversation.messages[0].content[:100] if conversation.messages else "Empty conversation"
-            summary = f"Conversation starting with: {first_msg}..."
-        
-        enhanced_document = f"{summary}\n\nTopics: {', '.join(key_topics)}\n\nFull conversation:\n{conversation_text}"
-        
-        doc_id = str(uuid.uuid4())
-        
-        metadata = {
-            "summary": summary,
-            "timestamp": datetime.now().isoformat(),
-            "message_count": len(conversation.messages),
-            "url": conversation.url,
-            "title": conversation.title or "Untitled Conversation",
-            "topics": json.dumps(key_topics),
-            "first_message": conversation.messages[0].content[:200] if conversation.messages else ""
-        }
-        
-        collection.add(
-            documents=[enhanced_document],
-            metadatas=[metadata],
-            ids=[doc_id]
-        )
-        
-        logger.info(f"Saved conversation {doc_id} with topics: {key_topics}")
-        
-        return {
-            "status": "success",
-            "id": doc_id,
-            "summary": summary,
-            "message_count": len(conversation.messages),
-            "topics": key_topics
-        }
-        
-    except Exception as e:
-        logger.error(f"Error in save_conversation: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/search_memory")
-async def search_memory(query: SearchQuery):
-    try:
-        logger.info(f"Searching for: {query.query}")
-        
-        results = collection.query(
-            query_texts=[query.query],
-            n_results=min(query.limit, 20),
-            include=["documents", "metadatas", "distances"]
-        )
-        
-        memories = []
-        if results and results.get('documents') and results['documents'][0]:
-            docs = results['documents'][0]
-            metas = results['metadatas'][0] if results.get('metadatas') else []
-            distances = results['distances'][0] if results.get('distances') else []
-            
-            for i in range(len(docs)):
-                distance = distances[i] if i < len(distances) else 1.0
-                relevance = max(0, min(1, 1 - (distance / 2)))
-                
-                if relevance > 0.3:
-                    memories.append({
-                        "content": docs[i][:300] + "..." if len(docs[i]) > 300 else docs[i],
-                        "metadata": metas[i] if i < len(metas) else {},
-                        "relevance": round(relevance, 2),
-                        "distance": distance
-                    })
-            
-            memories.sort(key=lambda x: x['relevance'], reverse=True)
-            memories = memories[:query.limit]
-        
-        logger.info(f"Found {len(memories)} relevant results")
-        return {"memories": memories}
-        
-    except Exception as e:
-        logger.error(f"Error in search_memory: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/get_all_memories")
-async def get_all_memories():
-    try:
-        all_data = collection.get()
-        
-        memories = []
-        if all_data and all_data.get('ids'):
-            for i in range(len(all_data['ids'])):
-                memory_data = {
-                    "id": all_data['ids'][i],
-                    "summary": "",
-                    "timestamp": "",
-                    "title": "Untitled",
-                    "topics": []
-                }
-                
-                if all_data.get('metadatas') and i < len(all_data['metadatas']):
-                    metadata = all_data['metadatas'][i]
-                    memory_data.update({
-                        "summary": metadata.get('summary', ''),
-                        "timestamp": metadata.get('timestamp', ''),
-                        "title": metadata.get('title', 'Untitled'),
-                        "topics": json.loads(metadata.get('topics', '[]'))
-                    })
-                
-                memories.append(memory_data)
-        
-        memories.sort(key=lambda x: x['timestamp'], reverse=True)
-        
-        return {"memories": memories, "total": len(memories)}
-        
-    except Exception as e:
-        logger.error(f"Error in get_all_memories: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/delete_memory/{memory_id}")
-async def delete_memory(memory_id: str):
-    try:
-        collection.delete(ids=[memory_id])
-        logger.info(f"Deleted memory {memory_id}")
-        return {"status": "success", "deleted_id": memory_id}
-    except Exception as e:
-        logger.error(f"Error deleting memory: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.put("/update_memory/{memory_id}")
-async def update_memory(memory_id: str, update: MemoryUpdate):
-    try:
-        existing = collection.get(ids=[memory_id])
-        
-        if not existing or not existing.get('ids'):
-            raise HTTPException(status_code=404, detail="Memory not found")
-        
-        metadata = existing['metadatas'][0]
-        metadata['summary'] = update.summary
-        metadata['title'] = update.title
-        
-        collection.update(
-            ids=[memory_id],
-            metadatas=[metadata]
-        )
-        
-        logger.info(f"Updated memory {memory_id}")
-        return {"status": "success", "updated_id": memory_id}
-        
-    except Exception as e:
-        logger.error(f"Error updating memory: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
