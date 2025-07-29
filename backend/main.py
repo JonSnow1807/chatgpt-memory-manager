@@ -892,28 +892,34 @@ async def analyze_conversation_turn(request: ConversationAnalysisRequest):
             messages=[
                 {
                     "role": "system",
-                    "content": """You are an expert conversation flow analyst. Analyze this conversation turn and provide:
+                    "content": """You are an expert conversation flow analyst helping users have better conversations with AI assistants. 
+
+IMPORTANT: You are coaching the HUMAN USER, not the AI assistant. All suggestions should be actionable advice for the user to improve their prompting and conversation skills.
+
+Analyze this conversation turn and provide:
 
 1. A flow quality score (0-10)
 2. Issue identification (if any)
-3. Specific improvement suggestions
+3. Specific improvement suggestions FOR THE USER
 4. Assessment of conversation direction
 
 Focus on:
-- Response relevance and helpfulness
-- Question clarity and specificity  
-- Conversation coherence and focus
-- Depth of exploration
-- Productive conversation patterns
+- How well the USER'S question was formed
+- Whether the USER provided enough context
+- If the USER could ask better follow-up questions
+- Ways the USER can guide the conversation better
+- Whether the USER is getting the information they need
 
 Respond in JSON format:
 {
   "flow_score": 7.5,
   "issue_type": "shallow_response" | "off_topic" | "repetitive" | "vague" | "good",
-  "suggestions": ["Ask for specific examples", "Focus on one aspect"],
+  "suggestions": ["Be more specific about your requirements", "Provide context about your situation", "Ask follow-up questions about specific aspects"],
   "conversation_direction": "improving" | "declining" | "stable",
-  "analysis": "Brief explanation of the assessment"
-}"""
+  "analysis": "Brief explanation focusing on how the USER can improve their prompting"
+}
+
+Remember: Frame all suggestions as actions the USER should take, not what the AI should do."""
                 },
                 {
                     "role": "user", 
