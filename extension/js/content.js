@@ -1824,7 +1824,7 @@ async function generateContextBridge() {
             },
             body: JSON.stringify({
                 current_conversation: currentConversation,
-                memory_ids: Array.from(selectedMemoryIds),
+                memory_ids: Array.from(selectedMemoryIds).join(' '),
                 max_context_tokens: 2000
             })
         });
