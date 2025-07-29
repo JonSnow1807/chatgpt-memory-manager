@@ -1630,6 +1630,11 @@ function initializeEnhanced() {
 // Initialize everything
 setTimeout(initializeEnhanced, 2000);
 
+window.detectGPTModel = detectGPTModel;
+window.extractConversationWithTurns = extractConversationWithTurns;
+window.checkContextUsage = checkContextUsage;
+window.knowledgeGraphData = knowledgeGraphData;
+
 // Add debug helper for manual testing
 window.debugTriggerAnalysis = function() {
     console.log('🔧 Manually triggering conversation analysis...');
