@@ -1646,8 +1646,42 @@ function startContextMonitoring() {
     checkContextUsage();
 }
 
+
+function detectGPTModel() {
+    // Check URL for model indicators
+    const url = window.location.href;
+    
+    // Check for GPT-4 indicators in the DOM
+    const modelSelectors = [
+        // Look for model selector dropdown
+        '[data-testid="model-selector"]',
+        '[class*="model-selector"]',
+        'button[aria-label*="GPT"]',
+        // Check for GPT-4 badge
+        '[class*="gpt-4"]',
+        '[data-model*="gpt-4"]'
+    ];
+    
+    for (const selector of modelSelectors) {
+        const element = document.querySelector(selector);
+        if (element) {
+            const text = element.textContent || element.getAttribute('aria-label') || '';
+            if (text.includes('GPT-4')) {
+                if (text.includes('32k')) return 'gpt-4-32k';
+                return 'gpt-4';
+            }
+            if (text.includes('GPT-3.5')) return 'gpt-3.5-turbo';
+        }
+    }
+    
+    // Default to GPT-4 if we can't detect
+    return 'gpt-4';
+}
+
+
 async function checkContextUsage() {
     const conversation = extractConversationWithTurns();
+    const model = detectGPTModel();
     
     try {
         const response = await fetch(`${API_URL}/analyze_context_usage`, {
@@ -1655,7 +1689,10 @@ async function checkContextUsage() {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ conversation })
+            body: JSON.stringify({ 
+                conversation,
+                model: model
+             })
         });
         
         const data = await response.json();
@@ -1816,6 +1853,9 @@ async function generateContextBridge() {
         const userId = await getUserId();
         const currentConversation = extractConversationWithTurns();
         
+
+        const selectedNodes = knowledgeGraphData.nodes.filter(n => selectedMemoryIds.has(n.id));
+        const searchQuery = selectedNodes.map(n => n.title).join(' ');
         const response = await fetch(`${API_URL}/intelligent_context_bridge`, {
             method: 'POST',
             headers: {
@@ -1824,7 +1864,7 @@ async function generateContextBridge() {
             },
             body: JSON.stringify({
                 current_conversation: currentConversation,
-                memory_ids: Array.from(selectedMemoryIds).join(' '),
+                search_query: searchQuery,
                 max_context_tokens: 2000
             })
         });

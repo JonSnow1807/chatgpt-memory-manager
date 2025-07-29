@@ -1151,6 +1151,7 @@ async def analyze_context_usage(request: Request):
     try:
         data = await request.json()
         current_conversation = data.get("conversation", [])
+        model = data.get("model", "gpt-4")  # Get model from request
         
         # Estimate token count (rough approximation)
         total_text = " ".join([msg.get("content", "") for msg in current_conversation])
@@ -1160,11 +1161,12 @@ async def analyze_context_usage(request: Request):
         context_limits = {
             "gpt-4": 8192,
             "gpt-3.5-turbo": 4096,
-            "gpt-4-32k": 32768
+            "gpt-4-32k": 32768,
+            "gpt-4-turbo": 128000  # Add GPT-4 Turbo
         }
         
-        # Assume GPT-4 as default
-        limit = context_limits.get("gpt-4", 8192)
+        # Use detected model or default to GPT-4
+        limit = context_limits.get(model, 8192)
         usage_percentage = (estimated_tokens / limit) * 100
         
         return {
@@ -1173,13 +1175,14 @@ async def analyze_context_usage(request: Request):
             "usage_percentage": round(usage_percentage, 1),
             "approaching_limit": usage_percentage > 70,
             "critical": usage_percentage > 85,
-            "recommendation": "Consider using Context Bridge to continue this conversation" if usage_percentage > 70 else "Context usage is healthy"
+            "recommendation": "Consider using Context Bridge to continue this conversation" if usage_percentage > 70 else "Context usage is healthy",
+            "detected_model": model  # Include detected model in response
         }
         
     except Exception as e:
         logger.error(f"Error analyzing context usage: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
+        
 @app.post("/intelligent_context_bridge")
 async def intelligent_context_bridge(request: ContextBridgeRequest, req: Request):
     """Generate intelligent context bridge with relevant memories"""
