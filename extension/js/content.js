@@ -1630,12 +1630,6 @@ function initializeEnhanced() {
 // Initialize everything
 setTimeout(initializeEnhanced, 2000);
 
-// Add debug helper for manual testing
-window.debugTriggerAnalysis = function() {
-    console.log('🔧 Manually triggering conversation analysis...');
-    analyzeConversationTurn();
-};
-
 // ===== MEMORY TAB FUNCTIONS =====
 
 // Function to monitor context usage
