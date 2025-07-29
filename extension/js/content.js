@@ -1708,18 +1708,51 @@ async function checkContextUsage() {
     const conversation = extractConversationWithTurns();
     const model = detectGPTModel();
     
-    // Better token estimation using GPT-3/4 tokenizer approximation
+    // More accurate token estimation
     let totalTokens = 0;
+    
     conversation.forEach(msg => {
-        // More accurate token estimation:
-        // - Average English word is ~1.3 tokens
-        // - Add overhead for message formatting
-        const words = msg.content.split(/\s+/).length;
-        const messageTokens = Math.ceil(words * 1.3) + 4; // +4 for role tokens
+        // Different estimation based on content type
+        const content = msg.content;
+        let messageTokens = 0;
+        
+        // Base overhead for message structure (role, separators, etc.)
+        messageTokens += 7; // More realistic overhead
+        
+        // Check content characteristics
+        const hasCode = /```[\s\S]*?```/.test(content) || /`[^`]+`/.test(content);
+        const hasUrls = /https?:\/\/[^\s]+/.test(content);
+        const hasNumbers = /\d+/.test(content);
+        const isProgramming = /function|const|let|var|if|for|while|class|import|def|return/.test(content);
+        
+        if (hasCode || isProgramming) {
+            // Code is more token-dense
+            messageTokens += Math.ceil(content.length / 2.5);
+        } else if (hasUrls) {
+            // URLs are token-heavy
+            const urls = content.match(/https?:\/\/[^\s]+/g) || [];
+            messageTokens += urls.length * 15; // Each URL averages 15 tokens
+            const remainingText = content.replace(/https?:\/\/[^\s]+/g, '');
+            messageTokens += Math.ceil(remainingText.length / 3.5);
+        } else {
+            // Regular text estimation
+            // More accurate: ~1 token per 3.5-4 characters for English
+            messageTokens += Math.ceil(content.length / 3.5);
+        }
+        
+        // Add extra tokens for special formatting
+        const bulletPoints = (content.match(/^\s*[-*•]/gm) || []).length;
+        const newlines = (content.match(/\n/g) || []).length;
+        messageTokens += bulletPoints * 2;
+        messageTokens += Math.ceil(newlines / 2);
+        
         totalTokens += messageTokens;
     });
     
-    // Updated context limits for 2025
+    // Add system message overhead (ChatGPT includes hidden system messages)
+    totalTokens += 200; // Approximate system message tokens
+    
+    // Updated context limits for December 2024
     const contextLimits = {
         // Legacy models
         "gpt-4": 8192,
@@ -1728,36 +1761,52 @@ async function checkContextUsage() {
         "gpt-4-turbo": 128000,
         
         // Current main models (all 128k context)
-        "gpt-4o": 128000,           // Main model
-        "gpt-4.5": 128000,          // Research Preview - writing focused
-        "gpt-4.1": 128000,          // Coding focused (32k mentioned but 128k in practice)
-        "gpt-4.1-mini": 128000,     // Faster everyday tasks
-        "gpt-4o-mini": 128000,      // Legacy mini
+        "gpt-4o": 128000,
+        "gpt-4.5": 128000,
+        "gpt-4.1": 128000,
+        "gpt-4.1-mini": 128000,
+        "gpt-4o-mini": 128000,
         
         // O-series reasoning models (all 128k context)
-        "o3": 128000,               // Advanced reasoning
-        "o3-mini": 128000,          // Legacy reasoning mini
-        "o4-mini": 128000,          // Fast reasoning
-        "o4-mini-high": 128000      // Better coding/visual reasoning
+        "o3": 128000,
+        "o3-mini": 128000,
+        "o4-mini": 128000,
+        "o4-mini-high": 128000
     };
     
-    const limit = contextLimits[model] || 8192;
+    const limit = contextLimits[model] || 128000; // Default to 128k
     const usage_percentage = (totalTokens / limit) * 100;
     
-    // Update the display directly without API call
+    // Update the display
     const data = {
         estimated_tokens: totalTokens,
         context_limit: limit,
         usage_percentage: Math.round(usage_percentage * 10) / 10,
         approaching_limit: usage_percentage > 70,
         critical: usage_percentage > 85,
-        detected_model: model
+        detected_model: model,
+        token_details: {
+            messages: conversation.length,
+            avg_tokens_per_message: Math.round(totalTokens / conversation.length)
+        }
     };
     
     updateContextUsageDisplay(data);
     
-    // Log for debugging
-    console.log('Context Usage:', data);
+    // Save the detected model for future use
+    try {
+        localStorage.setItem('lastUsedModel', model);
+    } catch (e) {}
+    
+    // Log detailed info for debugging
+    console.log('Context Usage Details:', {
+        model: model,
+        messages: conversation.length,
+        totalTokens: totalTokens,
+        limit: limit,
+        percentage: data.usage_percentage + '%',
+        charactersProcessed: conversation.reduce((sum, msg) => sum + msg.content.length, 0)
+    });
     
     return data;
 }
@@ -1769,15 +1818,23 @@ function updateContextUsageDisplay(data) {
     
     if (fill && text) {
         fill.style.width = `${Math.min(100, data.usage_percentage)}%`;
-        text.textContent = `${data.usage_percentage}% Context Used (${data.estimated_tokens}/${data.context_limit} tokens)`;
+        
+        // More informative text
+        const tokensText = data.estimated_tokens.toLocaleString();
+        const limitText = data.context_limit.toLocaleString();
+        text.textContent = `${data.usage_percentage}% Used (${tokensText}/${limitText} tokens) - ${data.detected_model}`;
         
         // Show warning if approaching limit
         if (data.approaching_limit && warning) {
             warning.style.display = 'block';
+            warning.title = data.critical ? 'Context almost full!' : 'Approaching context limit';
+            
             // Auto-switch to Memory tab if critical
             if (data.critical && activeTab !== 'memory') {
-                showTemporaryNotification('⚠️ Approaching context limit! Check Memory tab.', 'warning');
+                showTemporaryNotification('⚠️ Context 85% full! Consider using Context Bridge.', 'warning');
             }
+        } else if (warning) {
+            warning.style.display = 'none';
         }
     }
 }
