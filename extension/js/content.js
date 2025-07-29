@@ -1850,8 +1850,8 @@ async function loadKnowledgeGraph() {
                 'X-User-ID': userId
             },
             body: JSON.stringify({
-                time_range_days: 30,
-                max_nodes: 50
+                time_range_days: 365,
+                max_nodes: 100
             })
         });
         
