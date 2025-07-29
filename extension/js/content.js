@@ -743,7 +743,6 @@ function updateAnalyticsTabContent() {
 // ===== EXISTING FUNCTIONS (Keep all unchanged) =====
 
 // Function to extract conversation
-// Function to extract conversation
 function extractConversation() {
     const messages = [];
     const messageElements = document.querySelectorAll('[data-message-author-role]');
@@ -791,7 +790,6 @@ function extractConversation() {
     return messages;
 }
 
-// Enhanced conversation extraction with turn tracking
 // Enhanced conversation extraction with turn tracking
 function extractConversationWithTurns() {
     const messages = [];
@@ -924,7 +922,7 @@ function generateConversationId() {
     return `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
-// Monitor conversation changes
+// FIXED: Monitor conversation changes with polling backup
 function startConversationMonitoring() {
     if (conversationMonitor.isActive) return;
     
@@ -933,6 +931,16 @@ function startConversationMonitoring() {
     
     console.log('🎯 Conversation Flow Monitoring activated');
     
+    // Polling approach as primary method
+    setInterval(() => {
+        const currentMessages = extractConversationWithTurns();
+        if (currentMessages.length > conversationMonitor.lastMessageCount) {
+            console.log('📨 New message detected via polling');
+            analyzeConversationTurn();
+        }
+    }, 2000); // Check every 2 seconds
+    
+    // Mutation observer as backup
     const observer = new MutationObserver((mutations) => {
         let hasNewMessages = false;
         
@@ -940,8 +948,16 @@ function startConversationMonitoring() {
             if (mutation.type === 'childList') {
                 mutation.addedNodes.forEach(node => {
                     if (node.nodeType === Node.ELEMENT_NODE) {
-                        if (node.querySelector && node.querySelector('[data-message-author-role]')) {
+                        // More robust detection
+                        const hasMessage = node.querySelector && (
+                            node.querySelector('[data-message-author-role]') ||
+                            node.querySelector('.text-base') ||
+                            node.querySelector('.prose') ||
+                            (node.getAttribute && node.getAttribute('data-message-author-role'))
+                        );
+                        if (hasMessage) {
                             hasNewMessages = true;
+                            console.log('📨 New message detected via MutationObserver');
                         }
                     }
                 });
@@ -955,10 +971,17 @@ function startConversationMonitoring() {
         }
     });
     
-    const conversationContainer = document.querySelector('main') || document.body;
+    // Try multiple container selectors
+    const conversationContainer = document.querySelector('main [class*="react-scroll-to-bottom"]') || 
+                                  document.querySelector('main div[class*="flex-col"]') ||
+                                  document.querySelector('main') || 
+                                  document.body;
+    
     observer.observe(conversationContainer, {
         childList: true,
-        subtree: true
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['data-message-author-role']
     });
     
     conversationMonitor.observer = observer;
@@ -1475,6 +1498,12 @@ function initializeEnhanced() {
 
 // Initialize everything
 setTimeout(initializeEnhanced, 2000);
+
+// Add debug helper for manual testing
+window.debugTriggerAnalysis = function() {
+    console.log('🔧 Manually triggering conversation analysis...');
+    analyzeConversationTurn();
+};
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
