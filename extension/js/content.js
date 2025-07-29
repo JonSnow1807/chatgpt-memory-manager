@@ -1630,11 +1630,6 @@ function initializeEnhanced() {
 // Initialize everything
 setTimeout(initializeEnhanced, 2000);
 
-window.detectGPTModel = detectGPTModel;
-window.extractConversationWithTurns = extractConversationWithTurns;
-window.checkContextUsage = checkContextUsage;
-window.knowledgeGraphData = knowledgeGraphData;
-
 // Add debug helper for manual testing
 window.debugTriggerAnalysis = function() {
     console.log('🔧 Manually triggering conversation analysis...');
@@ -1645,42 +1640,67 @@ window.debugTriggerAnalysis = function() {
 
 // Function to monitor context usage
 function startContextMonitoring() {
-    // Check context usage every 30 seconds
-    contextUsageInterval = setInterval(checkContextUsage, 30000);
     // Check immediately
     checkContextUsage();
+    
+    // Check every 15 seconds instead of 30
+    if (contextUsageInterval) {
+        clearInterval(contextUsageInterval);
+    }
+    contextUsageInterval = setInterval(checkContextUsage, 15000);
 }
 
 
 function detectGPTModel() {
-    // Check URL for model indicators
-    const url = window.location.href;
+    // Method 1: Check the model selector dropdown if visible
+    const modelButton = document.querySelector('button[aria-haspopup="menu"]');
+    if (modelButton) {
+        const buttonText = modelButton.textContent || '';
+        
+        // Check for all current models
+        if (buttonText.includes('o4-mini-high')) return 'o4-mini-high';
+        if (buttonText.includes('o4-mini')) return 'o4-mini';
+        if (buttonText.includes('o3')) return 'o3';
+        if (buttonText.includes('GPT-4.5')) return 'gpt-4.5';
+        if (buttonText.includes('GPT-4.1-mini')) return 'gpt-4.1-mini';
+        if (buttonText.includes('GPT-4.1')) return 'gpt-4.1';
+        if (buttonText.includes('GPT-4o')) return 'gpt-4o';
+        if (buttonText.includes('GPT-4')) return 'gpt-4';
+        if (buttonText.includes('GPT-3.5')) return 'gpt-3.5-turbo';
+    }
     
-    // Check for GPT-4 indicators in the DOM
-    const modelSelectors = [
-        // Look for model selector dropdown
-        '[data-testid="model-selector"]',
-        '[class*="model-selector"]',
-        'button[aria-label*="GPT"]',
-        // Check for GPT-4 badge
-        '[class*="gpt-4"]',
-        '[data-model*="gpt-4"]'
-    ];
+    // Method 2: Check URL parameters
+    const urlParams = new URLSearchParams(window.location.search);
+    const modelParam = urlParams.get('model');
+    if (modelParam) {
+        if (modelParam.includes('o4-mini-high')) return 'o4-mini-high';
+        if (modelParam.includes('o4-mini')) return 'o4-mini';
+        if (modelParam.includes('o3')) return 'o3';
+        if (modelParam.includes('gpt-4.5')) return 'gpt-4.5';
+        if (modelParam.includes('gpt-4.1-mini')) return 'gpt-4.1-mini';
+        if (modelParam.includes('gpt-4.1')) return 'gpt-4.1';
+        if (modelParam.includes('gpt-4o')) return 'gpt-4o';
+        if (modelParam.includes('gpt-4')) return 'gpt-4';
+        if (modelParam.includes('gpt-3.5')) return 'gpt-3.5-turbo';
+    }
     
-    for (const selector of modelSelectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-            const text = element.textContent || element.getAttribute('aria-label') || '';
-            if (text.includes('GPT-4')) {
-                if (text.includes('32k')) return 'gpt-4-32k';
-                return 'gpt-4';
-            }
-            if (text.includes('GPT-3.5')) return 'gpt-3.5-turbo';
+    // Method 3: Look for model in the page title or any visible text
+    const pageText = document.body.innerText || '';
+    const models = ['o4-mini-high', 'o4-mini', 'o3', 'GPT-4.5', 'GPT-4.1-mini', 'GPT-4.1', 'GPT-4o', 'GPT-4', 'GPT-3.5'];
+    for (const model of models) {
+        if (pageText.includes(model)) {
+            return model.toLowerCase().replace('gpt-', 'gpt-');
         }
     }
     
-    // Default to GPT-4 if we can't detect
-    return 'gpt-4';
+    // Method 4: Check localStorage for last used model
+    try {
+        const stored = localStorage.getItem('lastUsedModel');
+        if (stored) return stored;
+    } catch (e) {}
+    
+    // Default to GPT-4o since it's the current default
+    return 'gpt-4o';
 }
 
 
@@ -1688,24 +1708,58 @@ async function checkContextUsage() {
     const conversation = extractConversationWithTurns();
     const model = detectGPTModel();
     
-    try {
-        const response = await fetch(`${API_URL}/analyze_context_usage`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ 
-                conversation,
-                model: model
-             })
-        });
+    // Better token estimation using GPT-3/4 tokenizer approximation
+    let totalTokens = 0;
+    conversation.forEach(msg => {
+        // More accurate token estimation:
+        // - Average English word is ~1.3 tokens
+        // - Add overhead for message formatting
+        const words = msg.content.split(/\s+/).length;
+        const messageTokens = Math.ceil(words * 1.3) + 4; // +4 for role tokens
+        totalTokens += messageTokens;
+    });
+    
+    // Updated context limits for 2025
+    const contextLimits = {
+        // Legacy models
+        "gpt-4": 8192,
+        "gpt-3.5-turbo": 16384,
+        "gpt-4-32k": 32768,
+        "gpt-4-turbo": 128000,
         
-        const data = await response.json();
-        updateContextUsageDisplay(data);
+        // Current main models (all 128k context)
+        "gpt-4o": 128000,           // Main model
+        "gpt-4.5": 128000,          // Research Preview - writing focused
+        "gpt-4.1": 128000,          // Coding focused (32k mentioned but 128k in practice)
+        "gpt-4.1-mini": 128000,     // Faster everyday tasks
+        "gpt-4o-mini": 128000,      // Legacy mini
         
-    } catch (error) {
-        console.error('Error checking context usage:', error);
-    }
+        // O-series reasoning models (all 128k context)
+        "o3": 128000,               // Advanced reasoning
+        "o3-mini": 128000,          // Legacy reasoning mini
+        "o4-mini": 128000,          // Fast reasoning
+        "o4-mini-high": 128000      // Better coding/visual reasoning
+    };
+    
+    const limit = contextLimits[model] || 8192;
+    const usage_percentage = (totalTokens / limit) * 100;
+    
+    // Update the display directly without API call
+    const data = {
+        estimated_tokens: totalTokens,
+        context_limit: limit,
+        usage_percentage: Math.round(usage_percentage * 10) / 10,
+        approaching_limit: usage_percentage > 70,
+        critical: usage_percentage > 85,
+        detected_model: model
+    };
+    
+    updateContextUsageDisplay(data);
+    
+    // Log for debugging
+    console.log('Context Usage:', data);
+    
+    return data;
 }
 
 function updateContextUsageDisplay(data) {
