@@ -32,6 +32,11 @@ let latestFollowUpSuggestion = null;
 
 const API_URL = 'https://chatgpt-memory-manager-production.up.railway.app';
 
+// Memory tab variables
+let selectedMemoryIds = new Set();
+let knowledgeGraphData = null;
+let contextUsageInterval = null;
+
 // ===== UNIFIED COACH PANEL =====
 function createUnifiedCoachPanel() {
     if (unifiedCoachPanel) return;
@@ -181,6 +186,33 @@ function createUnifiedCoachPanel() {
                 <span>📊</span>
                 <span>Analytics</span>
             </button>
+            <button class="coach-tab" data-tab="memory" style="
+                flex: 1;
+                background: none;
+                border: none;
+                padding: 10px 8px;
+                cursor: pointer;
+                font-size: 12px;
+                color: #666;
+                border-bottom: 2px solid transparent;
+                transition: all 0.2s;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 4px;
+            ">
+                <span>🧠</span>
+                <span>Memory</span>
+                <span class="context-warning" id="context-warning" style="
+                    display: none;
+                    background: #ff6b6b;
+                    color: white;
+                    font-size: 9px;
+                    padding: 1px 4px;
+                    border-radius: 8px;
+                    margin-left: 4px;
+                ">!</span>
+            </button>
         </div>
         
         <!-- Tab Content -->
@@ -229,6 +261,83 @@ function createUnifiedCoachPanel() {
                     <div style="color: #666; font-size: 13px; text-align: center; padding: 20px;">
                         Conversation analytics will appear as you chat...
                     </div>
+                </div>
+            </div>
+            
+            <!-- Memory Tab -->
+            <div id="memory-tab-content" class="tab-content" style="display: none;">
+                <div id="memory-content">
+                    <div id="context-usage-bar" style="
+                        background: #f0f0f0;
+                        height: 20px;
+                        border-radius: 10px;
+                        overflow: hidden;
+                        margin-bottom: 12px;
+                        position: relative;
+                    ">
+                        <div id="context-usage-fill" style="
+                            height: 100%;
+                            background: linear-gradient(90deg, #10a37f 0%, #ffa500 70%, #ff6b6b 85%);
+                            width: 0%;
+                            transition: width 0.3s ease;
+                        "></div>
+                        <div style="
+                            position: absolute;
+                            top: 0;
+                            left: 0;
+                            right: 0;
+                            text-align: center;
+                            font-size: 11px;
+                            line-height: 20px;
+                            color: #333;
+                            font-weight: 600;
+                        " id="context-usage-text">0% Context Used</div>
+                    </div>
+                    
+                    <div id="memory-search-section" style="margin-bottom: 12px;">
+                        <input type="text" id="memory-search-input" placeholder="Search your memories..." style="
+                            width: 100%;
+                            padding: 8px;
+                            border: 1px solid #e0e0e0;
+                            border-radius: 6px;
+                            font-size: 12px;
+                        ">
+                    </div>
+                    
+                    <div id="knowledge-graph-container" style="
+                        height: 200px;
+                        border: 1px solid #e0e0e0;
+                        border-radius: 8px;
+                        margin-bottom: 12px;
+                        background: #fafafa;
+                        position: relative;
+                    ">
+                        <div style="text-align: center; padding: 80px 20px; color: #999; font-size: 12px;">
+                            Loading knowledge graph...
+                        </div>
+                    </div>
+                    
+                    <div id="selected-memories" style="margin-bottom: 12px;">
+                        <div style="font-size: 11px; color: #666; margin-bottom: 6px;">
+                            <strong>Selected Memories:</strong>
+                        </div>
+                        <div id="selected-memories-list" style="max-height: 150px; overflow-y: auto;"></div>
+                    </div>
+                    
+                    <button id="generate-context-bridge" style="
+                        width: 100%;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white;
+                        border: none;
+                        padding: 10px;
+                        border-radius: 8px;
+                        font-size: 12px;
+                        cursor: pointer;
+                        margin-bottom: 8px;
+                        font-weight: 600;
+                    ">🌉 Generate Context Bridge</button>
+                    
+                    <div id="context-bridge-result" style="display: none;"></div>
                 </div>
             </div>
         </div>
@@ -349,6 +458,17 @@ function setupUnifiedPanelHandlers() {
     settingsBtn.addEventListener('click', () => {
         showTemporaryNotification('⚙️ Settings coming soon!', 'info');
     });
+    
+    // Memory tab specific handlers
+    const memorySearchInput = document.getElementById('memory-search-input');
+    if (memorySearchInput) {
+        memorySearchInput.addEventListener('input', debounce(searchMemories, 500));
+    }
+    
+    const generateBridgeBtn = document.getElementById('generate-context-bridge');
+    if (generateBridgeBtn) {
+        generateBridgeBtn.addEventListener('click', generateContextBridge);
+    }
 }
 
 function switchTab(tabName) {
@@ -379,6 +499,12 @@ function switchTab(tabName) {
     if (tabName === 'flow') {
         const flowBadge = unifiedCoachPanel.querySelector('#flow-badge');
         flowBadge.style.display = 'none';
+    }
+    
+    // Load memory data when switching to memory tab
+    if (tabName === 'memory') {
+        loadKnowledgeGraph();
+        startContextMonitoring();
     }
 }
 
@@ -1445,6 +1571,11 @@ function initializePhase2Features() {
     
     startConversationMonitoring();
     
+    // Start monitoring context usage
+    setTimeout(() => {
+        startContextMonitoring();
+    }, 5000);
+    
     // Keyboard shortcut (Cmd+J on Mac, Ctrl+J on Windows)
     document.addEventListener('keydown', (e) => {
         const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -1504,6 +1635,306 @@ window.debugTriggerAnalysis = function() {
     console.log('🔧 Manually triggering conversation analysis...');
     analyzeConversationTurn();
 };
+
+// ===== MEMORY TAB FUNCTIONS =====
+
+// Function to monitor context usage
+function startContextMonitoring() {
+    // Check context usage every 30 seconds
+    contextUsageInterval = setInterval(checkContextUsage, 30000);
+    // Check immediately
+    checkContextUsage();
+}
+
+async function checkContextUsage() {
+    const conversation = extractConversationWithTurns();
+    
+    try {
+        const response = await fetch(`${API_URL}/analyze_context_usage`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ conversation })
+        });
+        
+        const data = await response.json();
+        updateContextUsageDisplay(data);
+        
+    } catch (error) {
+        console.error('Error checking context usage:', error);
+    }
+}
+
+function updateContextUsageDisplay(data) {
+    const fill = document.getElementById('context-usage-fill');
+    const text = document.getElementById('context-usage-text');
+    const warning = document.getElementById('context-warning');
+    
+    if (fill && text) {
+        fill.style.width = `${Math.min(100, data.usage_percentage)}%`;
+        text.textContent = `${data.usage_percentage}% Context Used (${data.estimated_tokens}/${data.context_limit} tokens)`;
+        
+        // Show warning if approaching limit
+        if (data.approaching_limit && warning) {
+            warning.style.display = 'block';
+            // Auto-switch to Memory tab if critical
+            if (data.critical && activeTab !== 'memory') {
+                showTemporaryNotification('⚠️ Approaching context limit! Check Memory tab.', 'warning');
+            }
+        }
+    }
+}
+
+// Function to load and display knowledge graph
+async function loadKnowledgeGraph() {
+    try {
+        const userId = await getUserId();
+        const response = await fetch(`${API_URL}/generate_knowledge_graph`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': userId
+            },
+            body: JSON.stringify({
+                time_range_days: 30,
+                max_nodes: 50
+            })
+        });
+        
+        const data = await response.json();
+        knowledgeGraphData = data;
+        renderKnowledgeGraph(data);
+        
+    } catch (error) {
+        console.error('Error loading knowledge graph:', error);
+    }
+}
+
+// Simple D3.js knowledge graph renderer
+function renderKnowledgeGraph(data) {
+    const container = document.getElementById('knowledge-graph-container');
+    if (!container || !data.nodes.length) return;
+    
+    // Clear existing content
+    container.innerHTML = '';
+    
+    // For now, create a simple interactive list (we'll add D3.js visualization later)
+    const graphHTML = `
+        <div style="padding: 12px;">
+            <div style="font-size: 11px; color: #666; margin-bottom: 8px;">
+                📊 ${data.stats.total_memories} memories across ${data.stats.total_topics} topics
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                ${data.nodes.map(node => `
+                    <div class="memory-node" data-id="${node.id}" style="
+                        background: ${selectedMemoryIds.has(node.id) ? '#667eea' : '#e0e0e0'};
+                        color: ${selectedMemoryIds.has(node.id) ? 'white' : '#333'};
+                        padding: 4px 8px;
+                        border-radius: 12px;
+                        font-size: 10px;
+                        cursor: pointer;
+                        transition: all 0.2s;
+                    " title="${node.summary}">
+                        ${node.label}
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+    
+    container.innerHTML = graphHTML;
+    
+    // Add click handlers
+    container.querySelectorAll('.memory-node').forEach(node => {
+        node.addEventListener('click', () => toggleMemorySelection(node.dataset.id));
+    });
+}
+
+// Toggle memory selection
+function toggleMemorySelection(memoryId) {
+    if (selectedMemoryIds.has(memoryId)) {
+        selectedMemoryIds.delete(memoryId);
+    } else {
+        selectedMemoryIds.add(memoryId);
+    }
+    
+    // Update visual state
+    renderKnowledgeGraph(knowledgeGraphData);
+    updateSelectedMemoriesList();
+}
+
+// Update selected memories display
+function updateSelectedMemoriesList() {
+    const listContainer = document.getElementById('selected-memories-list');
+    if (!listContainer || !knowledgeGraphData) return;
+    
+    const selectedNodes = knowledgeGraphData.nodes.filter(n => selectedMemoryIds.has(n.id));
+    
+    listContainer.innerHTML = selectedNodes.length ? selectedNodes.map(node => `
+        <div style="
+            background: #f0f0f0;
+            padding: 6px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            font-size: 11px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        ">
+            <span>${node.title}</span>
+            <button class="remove-memory-btn" data-id="${node.id}" style="
+                background: none;
+                border: none;
+                color: #999;
+                cursor: pointer;
+                font-size: 12px;
+            ">×</button>
+        </div>
+    `).join('') : '<div style="color: #999; font-size: 11px;">No memories selected</div>';
+    
+    // Add event listeners to remove buttons
+    listContainer.querySelectorAll('.remove-memory-btn').forEach(btn => {
+        btn.addEventListener('click', () => toggleMemorySelection(btn.dataset.id));
+    });
+}
+
+// Generate context bridge
+async function generateContextBridge() {
+    const btn = document.getElementById('generate-context-bridge');
+    const resultDiv = document.getElementById('context-bridge-result');
+    
+    if (!selectedMemoryIds.size) {
+        showTemporaryNotification('Please select at least one memory', 'warning');
+        return;
+    }
+    
+    btn.disabled = true;
+    btn.innerHTML = '🔄 Generating context bridge...';
+    
+    try {
+        const userId = await getUserId();
+        const currentConversation = extractConversationWithTurns();
+        
+        const response = await fetch(`${API_URL}/intelligent_context_bridge`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': userId
+            },
+            body: JSON.stringify({
+                current_conversation: currentConversation,
+                memory_ids: Array.from(selectedMemoryIds),
+                max_context_tokens: 2000
+            })
+        });
+        
+        const data = await response.json();
+        
+        // Display result
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = `
+            <div style="
+                background: #f8f9fa;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                padding: 12px;
+                margin-top: 12px;
+            ">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <strong style="font-size: 12px;">Generated Context Bridge</strong>
+                    <span style="font-size: 10px; color: #666;">
+                        💾 Saved ${data.metrics.compression_ratio}% tokens
+                    </span>
+                </div>
+                <div style="
+                    background: white;
+                    padding: 10px;
+                    border-radius: 6px;
+                    font-size: 11px;
+                    line-height: 1.4;
+                    max-height: 200px;
+                    overflow-y: auto;
+                    margin-bottom: 8px;
+                ">
+                    ${data.context_injection.replace(/\n/g, '<br>')}
+                </div>
+                <button id="paste-context-bridge" style="
+                    width: 100%;
+                    background: #10a37f;
+                    color: white;
+                    border: none;
+                    padding: 8px;
+                    border-radius: 6px;
+                    font-size: 11px;
+                    cursor: pointer;
+                    font-weight: 600;
+                ">📋 Paste to ChatGPT</button>
+            </div>
+        `;
+        
+        // Add paste handler
+        document.getElementById('paste-context-bridge').addEventListener('click', () => {
+            const success = pasteIntoInput(data.context_injection);
+            if (success) {
+                showTemporaryNotification('✅ Context bridge pasted!', 'success');
+                // Minimize panel
+                togglePanelMinimize();
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error generating context bridge:', error);
+        showTemporaryNotification('Failed to generate context bridge', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '🌉 Generate Context Bridge';
+    }
+}
+
+// Get user ID helper
+async function getUserId() {
+    return new Promise((resolve) => {
+        chrome.runtime.sendMessage({ action: 'getUserId' }, (response) => {
+            resolve(response.userId);
+        });
+    });
+}
+
+// Add debounce helper
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+// Search memories function
+async function searchMemories(event) {
+    const query = event.target.value;
+    if (!query) {
+        loadKnowledgeGraph(); // Reset to full graph
+        return;
+    }
+    
+    // Filter existing graph based on search
+    if (knowledgeGraphData) {
+        const filteredData = {
+            ...knowledgeGraphData,
+            nodes: knowledgeGraphData.nodes.filter(node => 
+                node.title.toLowerCase().includes(query.toLowerCase()) ||
+                node.summary.toLowerCase().includes(query.toLowerCase()) ||
+                node.topics.some(t => t.toLowerCase().includes(query.toLowerCase()))
+            )
+        };
+        renderKnowledgeGraph(filteredData);
+    }
+}
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {

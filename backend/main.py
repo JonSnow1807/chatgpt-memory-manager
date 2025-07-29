@@ -393,6 +393,23 @@ class ConversationQualityRequest(BaseModel):
     conversation_id: str
     full_conversation: List[Dict]
 
+from typing import Tuple
+from collections import defaultdict
+
+class ContextBridgeRequest(BaseModel):
+    current_conversation: List[Dict]
+    search_query: Optional[str] = None
+    max_context_tokens: int = 2000
+
+class KnowledgeGraphRequest(BaseModel):
+    time_range_days: int = 30
+    max_nodes: int = 50
+
+class ContextInjectionRequest(BaseModel):
+    memory_ids: List[str]
+    current_context: str
+    target_tokens: int = 1500
+
 # Routes
 @app.get("/")
 async def root():
@@ -1118,6 +1135,339 @@ async def analyze_conversation_quality(request: ConversationQualityRequest):
             "analysis": "Analysis temporarily unavailable",
             "suggestions": ["Continue your conversation naturally"]
         }
+
+# Add all these endpoints right before the last 4 lines of the file:
+# if __name__ == "__main__":
+#     import uvicorn
+#     port = int(os.getenv("PORT", 8000))
+#     logger.info(f"Starting server on port {port}")
+#     uvicorn.run(app, host="0.0.0.0", port=port)
+
+# NEW CONTEXT BRIDGE ENDPOINTS - Add these here:
+
+@app.post("/analyze_context_usage")
+async def analyze_context_usage(request: Request):
+    """Analyze how close the user is to context limits"""
+    try:
+        data = await request.json()
+        current_conversation = data.get("conversation", [])
+        
+        # Estimate token count (rough approximation)
+        total_text = " ".join([msg.get("content", "") for msg in current_conversation])
+        estimated_tokens = len(total_text) / 4  # Rough estimate: 1 token ≈ 4 chars
+        
+        # ChatGPT context windows (approximate)
+        context_limits = {
+            "gpt-4": 8192,
+            "gpt-3.5-turbo": 4096,
+            "gpt-4-32k": 32768
+        }
+        
+        # Assume GPT-4 as default
+        limit = context_limits.get("gpt-4", 8192)
+        usage_percentage = (estimated_tokens / limit) * 100
+        
+        return {
+            "estimated_tokens": int(estimated_tokens),
+            "context_limit": limit,
+            "usage_percentage": round(usage_percentage, 1),
+            "approaching_limit": usage_percentage > 70,
+            "critical": usage_percentage > 85,
+            "recommendation": "Consider using Context Bridge to continue this conversation" if usage_percentage > 70 else "Context usage is healthy"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing context usage: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/intelligent_context_bridge")
+async def intelligent_context_bridge(request: ContextBridgeRequest, req: Request):
+    """Generate intelligent context bridge with relevant memories"""
+    user_id = req.headers.get("X-User-ID")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID required")
+    
+    if not client or not supabase:
+        raise HTTPException(status_code=503, detail="Services not configured")
+    
+    try:
+        # Step 1: Extract key topics from current conversation
+        current_topics = []
+        for msg in request.current_conversation[-10:]:  # Last 5 turns
+            if msg.get("role") == "user":
+                topics = extract_topics_from_text(msg.get("content", ""))
+                current_topics.extend(topics)
+        
+        # Step 2: Search for relevant memories
+        search_query = request.search_query or " ".join(set(current_topics))
+        
+        relevant_memories = []
+        if search_query:
+            # Use existing search_memory logic
+            embedding_response = client.embeddings.create(
+                model="text-embedding-3-small",
+                input=search_query
+            )
+            query_embedding = embedding_response.data[0].embedding
+            
+            results = supabase.rpc(
+                'search_memories',
+                {
+                    'query_embedding': query_embedding,
+                    'match_threshold': 0.6,
+                    'match_count': 10,
+                    'filter_user_id': user_id
+                }
+            ).execute()
+            
+            if results.data:
+                relevant_memories = results.data
+        
+        # Step 3: Build knowledge connections
+        connections = []
+        for i, mem1 in enumerate(relevant_memories):
+            for j, mem2 in enumerate(relevant_memories[i+1:], i+1):
+                # Calculate topic overlap
+                topics1 = set(mem1.get('topics', []))
+                topics2 = set(mem2.get('topics', []))
+                overlap = len(topics1.intersection(topics2))
+                if overlap > 0:
+                    connections.append({
+                        "source": mem1['id'],
+                        "target": mem2['id'],
+                        "strength": overlap
+                    })
+        
+        # Step 4: Generate smart summary using GPT
+        if relevant_memories:
+            memory_summaries = "\n".join([
+                f"- {mem['title']}: {mem['summary']}"
+                for mem in relevant_memories[:5]
+            ])
+            
+            compression_response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"""You are an expert at creating concise context bridges for conversations.
+                        
+Given previous conversation summaries, create a brief context injection that:
+1. Highlights only the most relevant information
+2. Uses bullet points for clarity
+3. Preserves key decisions, code snippets, or conclusions
+4. Stays under {request.max_context_tokens} tokens
+5. Starts with "📌 Continuing from previous conversations:"
+
+Focus on information that would be helpful for continuing the current discussion."""
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Current topics: {', '.join(set(current_topics))}\n\nPrevious conversations:\n{memory_summaries}"
+                    }
+                ],
+                max_tokens=request.max_context_tokens // 2
+            )
+            
+            context_injection = compression_response.choices[0].message.content
+        else:
+            context_injection = "No relevant previous conversations found."
+        
+        # Step 5: Calculate metrics
+        original_tokens = sum(len(mem.get('content', '')) / 4 for mem in relevant_memories)
+        compressed_tokens = len(context_injection) / 4
+        compression_ratio = (1 - compressed_tokens / original_tokens) * 100 if original_tokens > 0 else 0
+        
+        return {
+            "context_injection": context_injection,
+            "relevant_memories": [
+                {
+                    "id": mem['id'],
+                    "title": mem['title'],
+                    "summary": mem['summary'],
+                    "relevance_score": round(1 - mem.get('distance', 0.5), 2),
+                    "topics": mem.get('topics', []),
+                    "created_at": mem['created_at']
+                }
+                for mem in relevant_memories[:5]
+            ],
+            "knowledge_graph": {
+                "nodes": [
+                    {
+                        "id": mem['id'],
+                        "title": mem['title'],
+                        "topics": mem.get('topics', []),
+                        "size": len(mem.get('content', ''))
+                    }
+                    for mem in relevant_memories
+                ],
+                "connections": connections
+            },
+            "metrics": {
+                "memories_found": len(relevant_memories),
+                "original_tokens": int(original_tokens),
+                "compressed_tokens": int(compressed_tokens),
+                "compression_ratio": round(compression_ratio, 1),
+                "topics_covered": list(set(current_topics))
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in intelligent context bridge: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/generate_knowledge_graph")
+async def generate_knowledge_graph(request: KnowledgeGraphRequest, req: Request):
+    """Generate a knowledge graph of all user's conversations"""
+    user_id = req.headers.get("X-User-ID")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID required")
+    
+    try:
+        # Get recent memories
+        cutoff_date = (datetime.now() - timedelta(days=request.time_range_days)).isoformat()
+        results = supabase.table("memories").select("*").eq(
+            "user_id", user_id
+        ).gte("created_at", cutoff_date).order(
+            "created_at", desc=True
+        ).limit(request.max_nodes).execute()
+        
+        if not results.data:
+            return {"nodes": [], "edges": [], "clusters": []}
+        
+        memories = results.data
+        
+        # Build topic-based graph
+        topic_graph = defaultdict(list)
+        nodes = []
+        edges = []
+        
+        for mem in memories:
+            nodes.append({
+                "id": mem['id'],
+                "label": mem['title'][:30] + "..." if len(mem['title']) > 30 else mem['title'],
+                "title": mem['title'],
+                "summary": mem['summary'][:100] + "...",
+                "topics": mem.get('topics', []),
+                "created_at": mem['created_at'],
+                "size": min(50, 10 + len(mem.get('content', '')) / 100)  # Node size based on content
+            })
+            
+            # Group by topics for clustering
+            for topic in mem.get('topics', ['general']):
+                topic_graph[topic].append(mem['id'])
+        
+        # Create edges based on shared topics
+        processed_pairs = set()
+        for topic, memory_ids in topic_graph.items():
+            for i, id1 in enumerate(memory_ids):
+                for id2 in memory_ids[i+1:]:
+                    pair = tuple(sorted([id1, id2]))
+                    if pair not in processed_pairs:
+                        processed_pairs.add(pair)
+                        edges.append({
+                            "source": id1,
+                            "target": id2,
+                            "weight": 1,
+                            "topic": topic
+                        })
+        
+        # Identify clusters
+        clusters = [
+            {
+                "id": topic,
+                "name": topic.capitalize(),
+                "nodes": memory_ids,
+                "color": f"hsl({hash(topic) % 360}, 70%, 50%)"
+            }
+            for topic, memory_ids in topic_graph.items()
+            if len(memory_ids) > 1
+        ]
+        
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "clusters": clusters,
+            "stats": {
+                "total_memories": len(memories),
+                "total_topics": len(topic_graph),
+                "most_common_topic": max(topic_graph.items(), key=lambda x: len(x[1]))[0] if topic_graph else None,
+                "connections": len(edges)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating knowledge graph: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/compress_context")
+async def compress_context(request: ContextInjectionRequest, req: Request):
+    """Compress multiple memories into optimal context injection"""
+    user_id = req.headers.get("X-User-ID")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID required")
+    
+    if not client or not supabase:
+        raise HTTPException(status_code=503, detail="Services not configured")
+    
+    try:
+        # Fetch selected memories
+        memories = []
+        for memory_id in request.memory_ids:
+            result = supabase.table("memories").select("*").eq(
+                "id", memory_id
+            ).eq("user_id", user_id).execute()
+            
+            if result.data:
+                memories.append(result.data[0])
+        
+        if not memories:
+            raise HTTPException(status_code=404, detail="No memories found")
+        
+        # Create comprehensive context
+        memory_context = "\n\n".join([
+            f"### {mem['title']}\n{mem['summary']}\nKey points: {', '.join(mem.get('topics', []))}"
+            for mem in memories
+        ])
+        
+        # Use GPT to create optimal compression
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"""You are an expert at compressing conversation context while preserving critical information.
+
+Create a context injection that:
+1. Summarizes the key information from previous conversations
+2. Highlights important decisions, conclusions, or code
+3. Maintains chronological flow when relevant
+4. Uses clear, concise language
+5. Stays under {request.target_tokens} tokens
+
+Format the output to be directly pasteable into a ChatGPT conversation."""
+                },
+                {
+                    "role": "user",
+                    "content": f"Current context: {request.current_context}\n\nPrevious conversations to compress:\n{memory_context}"
+                }
+            ],
+            max_tokens=request.target_tokens
+        )
+        
+        compressed_context = response.choices[0].message.content
+        
+        return {
+            "compressed_context": compressed_context,
+            "original_memories": len(memories),
+            "estimated_tokens": len(compressed_context) / 4,
+            "compression_successful": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Error compressing context: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+        
 
 if __name__ == "__main__":
     import uvicorn
