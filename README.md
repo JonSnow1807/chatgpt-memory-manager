@@ -1,5 +1,9 @@
 # ChatGPT Memory Manager
 
+[![Available in Chrome Web Store](https://img.shields.io/chrome-web-store/v/bieoffmnblcajoahiljjbhffeccojpop)](https://chrome.google.com/webstore/detail/chatgpt-spark/bieoffmnblcajoahiljjbhffeccojpop)
+[![Users](https://img.shields.io/chrome-web-store/users/bieoffmnblcajoahiljjbhffeccojpop)](https://chrome.google.com/webstore/detail/chatgpt-spark/bieoffmnblcajoahiljjbhffeccojpop)
+[![Rating](https://img.shields.io/chrome-web-store/rating/bieoffmnblcajoahiljjbhffeccojpop)](https://chrome.google.com/webstore/detail/chatgpt-spark/bieoffmnblcajoahiljjbhffeccojpop)
+
 An intelligent Chrome extension that captures, stores, and searches ChatGPT conversations using AI-powered summaries and vector embeddings.
 
 ## 🚀 Features
